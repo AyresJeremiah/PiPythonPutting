@@ -1,13 +1,13 @@
 {
   "ball_color": "white",
-  "min_ball_radius_px": 3,
+  "min_ball_radius_px": 1,
   "show_mask": false,
-  "target_width": 1464,
+  "target_width": 960,
   "roi": {
-    "startx": 586,
-    "endx": 1056,
-    "starty": 505,
-    "endy": 1019
+    "startx": 519,
+    "endx": 919,
+    "starty": 516,
+    "endy": 1080
   },
   "calibration": {
     "px_per_yard": 1103.6779141903696,
@@ -18,5 +18,13 @@
       "x2": 1479,
       "y2": 46
     }
+  },
+  "min_report_mph": 0.2,
+  "post": {
+    "enabled": true,
+    "host": "10.10.10.23",
+    "port": 8888,
+    "path": "/putting",
+    "timeout_sec": 2.5
   }
 }
