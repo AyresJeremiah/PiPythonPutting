@@ -58,3 +58,11 @@ def draw_calibration_line(frame, line, color=(0,255,255)):
     cv2.circle(frame, (x2,y2), 4, (0,0,0), -1)
     cv2.circle(frame, (x1,y1), 3, color, -1)
     cv2.circle(frame, (x2,y2), 3, color, -1)
+
+def draw_status_dot(frame, status: str):
+    # status: 'red' | 'yellow' | 'green'
+    h, w = frame.shape[:2]
+    center = (w - 20, 20)
+    color = {'red': (0,0,255), 'yellow': (0,255,255), 'green': (0,200,0)}.get(status, (200,200,200))
+    cv2.circle(frame, center, 8, (0,0,0), -1)
+    cv2.circle(frame, center, 7, color, -1)

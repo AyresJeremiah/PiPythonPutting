@@ -8,11 +8,20 @@ _DEFAULTS: Dict[str, Any] = {
     "min_ball_radius_px": 3,
     "show_mask": False,
     "target_width": 960,
+    "min_report_mph": 1.0,  # hits below this won't be reported
     "roi": {"startx": None, "endx": None, "starty": None, "endy": None},
     "calibration": {
         "px_per_yard": None,
         "yards_length": 1.0,
         "line": {"x1": 100, "y1": 100, "x2": 400, "y2": 100}
+    },
+    # HTTP post target (not changeable via UI)
+    "post": {
+        "enabled": True,
+        "host": "10.10.10.23",
+        "port": 8888,
+        "path": "/putting",
+        "timeout_sec": 2.5
     }
 }
 
