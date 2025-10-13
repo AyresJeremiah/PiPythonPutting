@@ -37,34 +37,55 @@ def to_real_units(px_velocity, px_per_yard):
     return yds_per_s, mph
 
 def post_shot(mph, yds_per_s, direction):
+    """
+    Send shot data to the server defined in settings.json -> post.{host,port,path,timeout_sec}.
+    Args:
+        mph (float|None): Ball speed in mph (will be formatted to 2 decimals; None -> "0.00").
+        yds_per_s (float|None): Not sent today, but kept for future use.
+        direction (float|None): Horizontal launch angle in degrees (your HLA), 2 decimals; None -> "0.00".
+    Returns:
+        (ok: bool, response_json: dict|None)
+    """
     s = appsettings.load()
-    post = s.get("post", {})
-    if not post.get("enabled", True):
-        return False
-    host = post.get("host", "10.10.10.23")
-    port = int(post.get("port", 8888))
-    path = post.get("path", "/putting")
-    timeout = float(post.get("timeout_sec", 2.5))
+    post_cfg = s.get("post", {})
+
+    if not post_cfg.get("enabled", True):
+        log("POST disabled in settings; skipping.")
+        return False, None
+
+    host = post_cfg.get("host", "10.10.10.23")
+    port = int(post_cfg.get("port", 8888))
+    path = post_cfg.get("path", "/putting")
+    timeout = float(post_cfg.get("timeout_sec", 2.5))
 
     url = f"http://{host}:{port}{path}"
-    data = {
+
+    payload = {
         "ballData": {
-            "BallSpeed": f"{mph:.2f}" if mph is not None else "0.00",
+            "BallSpeed": f"{(mph or 0.0):.2f}",
             "TotalSpin": 0,
-            "LaunchDirection": f"{direction:.2f}" if direction is not None else "0.00"
+            "LaunchDirection": f"{(direction or 0.0):.2f}"
         }
     }
+
     try:
-        res = requests.post(url, json=data, timeout=timeout)
+        res = requests.post(url, json=payload, timeout=timeout)
         res.raise_for_status()
-        _ = res.json() if "application/json" in res.headers.get("Content-Type","") else {}
-        log(f"POST OK -> {url}")
-        return True
+        # Try to parse JSON (server may return plain text)
+        try:
+            data = res.json()
+        except ValueError:
+            data = None
+        log(f"POST OK -> {url} | sent {payload}")
+        if data is not None:
+            log(f"Response JSON: {data}")
+        return True, data
     except requests.exceptions.HTTPError as e:
-        log(f"HTTP error posting shot: {e}")
+        log(f"HTTP error posting shot -> {url}: {e}")
     except requests.exceptions.RequestException as e:
-        log(f"Request error posting shot: {e}")
-    return False
+        log(f"Request error posting shot -> {url}: {e}")
+
+    return False, None
 
 def main():
     s = appsettings.load()
