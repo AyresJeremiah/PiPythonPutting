@@ -91,7 +91,7 @@ def main():
     cal = CalibrationEditor()
     picker = ColorPicker("PuttTracker")
 
-    log("Controls: q=quit | m=mask | a=settings | c=calibrate | b=pick ball color")
+    log("Controls: q=quit | m=mask | a=settings | c=calibrate | b=pick ball color (sliders)")
     last_pos = None
     last_inside = False
     last_valid_velocity = None
@@ -127,9 +127,11 @@ def main():
                     "Adjust ROI & settings in 'PuttTracker Settings'",
                     "a: close sliders | c: calibration | b: color pick | q: quit"
                 ])
+
             if cal.active:
                 L = s["calibration"]["line"]
                 draw_calibration_line(frame, L)
+                from ui.calibration_editor import compute_px_per_yard
                 ppy = compute_px_per_yard()
                 txt = f"CALIBRATION: px/yd={ppy:.2f}" if ppy else "CALIBRATION: adjust line to yardstick"
                 banner(frame, txt)
@@ -138,8 +140,10 @@ def main():
                     "Use 'yards_len x10' if your stick != 1.0 yd",
                     "Press 'c' to close and save, then resume"
                 ])
+
             if picker.active:
                 picker.render_overlay(frame)
+
             draw_status_dot(frame, 'yellow')
 
         else:
@@ -219,6 +223,7 @@ def main():
             editor.toggle(w0, h0)
         elif key == ord('c'):
             if cal.active:
+                from ui.calibration_editor import compute_px_per_yard
                 ppy = compute_px_per_yard()
                 if ppy:
                     appsettings.set_value("calibration.px_per_yard", float(ppy))
@@ -227,13 +232,14 @@ def main():
             else:
                 cal.toggle(w0, h0)
         elif key == ord('b'):
-            # Open/close picker; when opening, pass current frame to sample from
+            # Toggle slider picker; on close, sample & save from current frame
             if picker.active:
-                picker.close()
+                picker.commit(frame)
+                picker.toggle(w0, h0)  # close
+                log("Ball color saved from slider picker.")
             else:
-                picker.open(w0, h0, frame)
+                picker.toggle(w0, h0)  # open
 
-    # Cleanup
     editor.close(); cal.close(); picker.close()
     cv2.destroyAllWindows()
 

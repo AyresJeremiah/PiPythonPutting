@@ -6,185 +6,16 @@ if [ ! -d "src" ]; then
   exit 1
 fi
 
-# 1) Extend settings schema: add ball_hsv (lower/upper)
+# Ensure settings contains the ball_hsv schema
 python3 - << 'PY'
 import json, os
 p="settings.json"
-if os.path.exists(p):
-    s=json.load(open(p))
-else:
-    s={}
-s.setdefault("ball_color","white")
+s=json.load(open(p)) if os.path.exists(p) else {}
 s.setdefault("ball_hsv", {"lower": None, "upper": None})
 json.dump(s, open(p,"w"), indent=2)
 PY
 
-cat > src/settings.py << 'EOF'
-import json, os
-from typing import Any, Dict
-
-SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
-
-_DEFAULTS: Dict[str, Any] = {
-    "ball_color": "white",                 # named fallback ('white', 'yellow', etc.)
-    "ball_hsv": {"lower": None, "upper": None},  # custom HSV overrides if set
-    "min_ball_radius_px": 3,
-    "show_mask": False,
-    "target_width": 960,
-    "min_report_mph": 1.0,
-    "roi": {"startx": None, "endx": None, "starty": None, "endy": None},
-    "calibration": {
-        "px_per_yard": None,
-        "yards_length": 1.0,
-        "line": {"x1": 100, "y1": 100, "x2": 400, "y2": 100}
-    },
-    "post": {
-        "enabled": True,
-        "host": "10.10.10.23",
-        "port": 8888,
-        "path": "/putting",
-        "timeout_sec": 2.5
-    }
-}
-
-_cache: Dict[str, Any] = None
-
-def _merge(d, defaults):
-    for k, v in defaults.items():
-        if k not in d:
-            d[k] = v
-        elif isinstance(v, dict) and isinstance(d[k], dict):
-            _merge(d[k], v)
-    return d
-
-def load() -> Dict[str, Any]:
-    global _cache
-    if _cache is not None:
-        return _cache
-    if os.path.exists(SETTINGS_PATH):
-        with open(SETTINGS_PATH, "r") as f:
-            try:
-                data = json.load(f)
-            except Exception:
-                data = {}
-    else:
-        data = {}
-    _cache = _merge(data, _DEFAULTS.copy())
-    return _cache
-
-def save():
-    if _cache is None:
-        return
-    with open(SETTINGS_PATH, "w") as f:
-        json.dump(_cache, f, indent=2)
-
-def set_value(path, value):
-    """path like 'show_mask' or 'roi.startx' or 'ball_hsv.lower'."""
-    s = load()
-    parts = path.split(".")
-    ref = s
-    for p in parts[:-1]:
-        ref = ref[p]
-    ref[parts[-1]] = value
-    save()
-
-def set_roi(x1, y1, x2, y2):
-    s = load()
-    s["roi"]["startx"] = int(min(x1, x2))
-    s["roi"]["endx"]   = int(max(x1, x2))
-    s["roi"]["starty"] = int(min(y1, y2))
-    s["roi"]["endy"]   = int(max(y1, y2))
-    save()
-
-def ensure_roi_initialized(width: int, height: int):
-    s = load()
-    roi = s["roi"]
-    if None in (roi["startx"], roi["endx"], roi["starty"], roi["endy"]):
-        roi["startx"] = 0
-        roi["starty"] = 0
-        roi["endx"]   = int(width)
-        roi["endy"]   = int(height)
-        save()
-
-def clamp_roi(width: int, height: int):
-    s = load()
-    r = s["roi"]
-    r["startx"] = max(0, min(int(r["startx"]), width-1))
-    r["endx"]   = max(1, min(int(r["endx"]), width))
-    r["starty"] = max(0, min(int(r["starty"]), height-1))
-    r["endy"]   = max(1, min(int(r["endy"]), height))
-    if r["startx"] >= r["endx"]:
-        r["endx"] = min(width, r["startx"] + 1)
-    if r["starty"] >= r["endy"]:
-        r["endy"] = min(height, r["starty"] + 1)
-    save()
-
-def clamp_calibration(width:int, height:int):
-    s = load()
-    L = s["calibration"]["line"]
-    for k in ("x1","x2"):
-        L[k] = max(0, min(int(L[k]), width-1))
-    for k in ("y1","y2"):
-        L[k] = max(0, min(int(L[k]), height-1))
-    yl = float(s["calibration"].get("yards_length", 1.0))
-    if yl <= 0: s["calibration"]["yards_length"] = 1.0
-    save()
-EOF
-
-# 2) Ball detector refreshes thresholds each frame from settings (custom HSV wins)
-cat > src/tracking/ball_detector.py << 'EOF'
-import cv2
-import numpy as np
-from config import COLOR_RANGES
-import settings as appsettings
-
-class BallDetector:
-    def __init__(self):
-        self.last_mask = None
-        self.lower = None
-        self.upper = None
-        self.min_radius = None
-        self.refresh_from_settings()
-
-    def refresh_from_settings(self):
-        s = appsettings.load()
-        self.min_radius = int(s.get("min_ball_radius_px", 3))
-        custom = s.get("ball_hsv", {"lower": None, "upper": None})
-        if custom and custom.get("lower") and custom.get("upper"):
-            self.lower = np.array(custom["lower"], dtype=np.uint8)
-            self.upper = np.array(custom["upper"], dtype=np.uint8)
-        else:
-            color_name = s.get("ball_color", "white")
-            cr = COLOR_RANGES.get(color_name, COLOR_RANGES["white"])
-            self.lower = np.array(cr["lower"], dtype=np.uint8)
-            self.upper = np.array(cr["upper"], dtype=np.uint8)
-
-    def detect(self, frame):
-        # Refresh in case settings changed (cheap)
-        self.refresh_from_settings()
-
-        blurred = cv2.GaussianBlur(frame, (5, 5), 0)
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-
-        mask = cv2.inRange(hsv, self.lower, self.upper)
-        mask = cv2.erode(mask, None, iterations=1)
-        mask = cv2.dilate(mask, None, iterations=2)
-        self.last_mask = mask
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None, None
-
-        largest = max(contours, key=cv2.contourArea)
-        (x, y), radius = cv2.minEnclosingCircle(largest)
-        if radius < self.min_radius:
-            return None, None
-
-        return (float(x), float(y)), float(radius)
-EOF
-
-# 3) UI: color picker (click to sample HSV, show swatch, save to settings)
-mkdir -p src/ui
+# Replace color picker with slider-based picker
 cat > src/ui/color_picker.py << 'EOF'
 import cv2
 import numpy as np
@@ -193,87 +24,110 @@ import settings as appsettings
 def _clamp(v, lo, hi): return max(lo, min(int(v), hi))
 
 class ColorPicker:
-    def __init__(self, main_window_name="PuttTracker"):
-        self.window = main_window_name
+    """
+    Slider-based picker:
+      - open(w,h): shows a window with X/Y sliders bounded to frame size
+      - render_overlay(frame): draws dot and instructions
+      - commit(frame): samples HSV around (x,y) and saves ball_hsv.lower/upper
+    """
+    def __init__(self, main_window_name="PuttTracker", picker_window="PuttTracker Color Picker"):
+        self.main_window = main_window_name
+        self.name = picker_window
         self.active = False
-        self.last_hsv = None
         self._w = None
         self._h = None
-        self._picked = False
-        # Tolerances around sampled HSV (tune if needed)
+        self._lock = False
+        self._x = 0
+        self._y = 0
+        # HSV tolerances (can be expanded if needed)
         self.dH = 12
         self.dS = 60
         self.dV = 70
+        self.last_hsv = None  # preview swatch while open
 
-    def _on_mouse(self, event, x, y, flags, param):
-        if not self.active: return
-        if event == cv2.EVENT_LBUTTONDOWN:
-            # read small region around click
-            frame_bgr = param  # current frame passed in setMouseCallback
-            if frame_bgr is None: return
-            h, w = frame_bgr.shape[:2]
-            x1 = max(0, x-5); x2 = min(w-1, x+5)
-            y1 = max(0, y-5); y2 = min(h-1, y+5)
-            patch = frame_bgr[y1:y2+1, x1:x2+1]
-            hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
-            mean = hsv.reshape(-1,3).mean(axis=0)
-            H,S,V = map(int, mean)
-            self.last_hsv = (H,S,V)
-            # Build tolerant lower/upper
-            lower = [ _clamp(H - self.dH, 0, 180), _clamp(S - self.dS, 0, 255), _clamp(V - self.dV, 0, 255) ]
-            upper = [ _clamp(H + self.dH, 0, 180), _clamp(S + self.dS, 0, 255), _clamp(V + self.dV, 0, 255) ]
-            # Save to settings and flag picked
-            appsettings.set_value("ball_hsv.lower", lower)
-            appsettings.set_value("ball_hsv.upper", upper)
-            # keep 'ball_color' as-is, but custom HSV overrides in detector
-            self._picked = True
+    def _sync_from_settings(self):
+        # Try to initialize at ROI center if present
+        s = appsettings.load()
+        roi = s.get("roi", {})
+        try:
+            x1,y1,x2,y2 = int(roi["startx"]),int(roi["starty"]),int(roi["endx"]),int(roi["endy"])
+            cx = max(0, min((x1+x2)//2, self._w-1))
+            cy = max(0, min((y1+y2)//2, self._h-1))
+            self._x, self._y = cx, cy
+        except Exception:
+            self._x, self._y = self._w//2, self._h//2
 
-    def open(self, frame_width, frame_height, current_frame):
-        self._w, self._h = frame_width, frame_height
+    def _on_x(self, v):
+        if self._lock: return
+        self._x = _clamp(v, 0, self._w-1)
+
+    def _on_y(self, v):
+        if self._lock: return
+        self._y = _clamp(v, 0, self._h-1)
+
+    def open(self, frame_width, frame_height):
+        self._w, self._h = int(frame_width), int(frame_height)
+        self._sync_from_settings()
+        cv2.namedWindow(self.name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.name, 360, 120)
+        cv2.createTrackbar("x", self.name, int(self._x), self._w-1, lambda v: self._on_x(v))
+        cv2.createTrackbar("y", self.name, int(self._y), self._h-1, lambda v: self._on_y(v))
         self.active = True
-        # Pass current frame into mouse callback so we can sample from it
-        cv2.setMouseCallback(self.window, lambda e,x,y,f, p=current_frame: self._on_mouse(e,x,y,f,p))
 
     def close(self):
-        self.active = False
-        self._picked = False
-        self.last_hsv = None
-        cv2.setMouseCallback(self.window, lambda *args: None)
-
-    def toggle(self, frame_width, frame_height, current_frame):
         if self.active:
-            self.close()
-        else:
-            self.open(frame_width, frame_height, current_frame)
+            try: cv2.destroyWindow(self.name)
+            except Exception: pass
+        self.active = False
+        self.last_hsv = None
 
-    def picked(self):
-        return self._picked
+    def toggle(self, frame_width, frame_height):
+        if self.active: self.close()
+        else: self.open(frame_width, frame_height)
 
     def render_overlay(self, frame):
-        # Show instructions and a color swatch of last_hsv if available
-        h, w = frame.shape[:2]
-        # Instruction banner
-        text = "COLOR PICK MODE: click the BALL to sample color"
-        cv2.rectangle(frame, (8, 40), (8 + 10 + len(text)*9, 72), (0,0,0), -1)
-        cv2.putText(frame, text, (16, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1, cv2.LINE_AA)
+        # Dot + crosshair
+        x, y = int(self._x), int(self._y)
+        cv2.drawMarker(frame, (x,y), (0,255,255), markerType=cv2.MARKER_CROSS, markerSize=14, thickness=2)
+        cv2.circle(frame, (x,y), 5, (0,255,255), 2)
+        # Instruction + (optional) swatch preview if last_hsv exists
+        text = "COLOR PICK: move sliders (x,y) over the BALL. Press 'b' to save."
+        cv2.rectangle(frame, (8, 40), (8 + 12*len(text), 72), (0,0,0), -1)
+        cv2.putText(frame, text, (16, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (255,255,255), 1, cv2.LINE_AA)
         if self.last_hsv is not None:
             H,S,V = self.last_hsv
-            # swatch box
-            sw = 60
-            x0 = 16; y0 = 88
+            sw = 60; x0=16; y0=88
             hsv_img = np.uint8([[[H,S,V]]])
             bgr = cv2.cvtColor(hsv_img, cv2.COLOR_HSV2BGR)[0,0].tolist()
             cv2.rectangle(frame, (x0, y0), (x0+sw, y0+sw), (0,0,0), -1)
             cv2.rectangle(frame, (x0+2, y0+2), (x0+sw-2, y0+sw-2), bgr, -1)
-            cv2.putText(frame, f"HSV: {H},{S},{V}", (x0+sw+10, y0+30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1, cv2.LINE_AA)
-            cv2.putText(frame, "Saved to settings", (x0+sw+10, y0+52), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180,255,180), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"HSV: {H},{S},{V}", (x0+sw+10, y0+30), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (255,255,255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "Saved (pending close)", (x0+sw+10, y0+52), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180,255,180), 1, cv2.LINE_AA)
+
+    def _sample_hsv(self, frame_bgr):
+        x, y = int(self._x), int(self._y)
+        h, w = frame_bgr.shape[:2]
+        # sample 11x11 around the point (clamped)
+        x1 = max(0, x-5); x2 = min(w-1, x+5)
+        y1 = max(0, y-5); y2 = min(h-1, y+5)
+        patch = frame_bgr[y1:y2+1, x1:x2+1]
+        hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        H,S,V = hsv.reshape(-1,3).mean(axis=0)
+        return int(H), int(S), int(V)
+
+    def commit(self, frame_bgr):
+        """Sample at current (x,y) and save tolerant HSV to settings."""
+        if frame_bgr is None: return
+        H,S,V = self._sample_hsv(frame_bgr)
+        self.last_hsv = (H,S,V)
+        lower = [ _clamp(H - self.dH, 0, 180), _clamp(S - self.dS, 0, 255), _clamp(V - self.dV, 0, 255) ]
+        upper = [ _clamp(H + self.dH, 0, 180), _clamp(S + self.dS, 0, 255), _clamp(V + self.dV, 0, 255) ]
+        appsettings.set_value("ball_hsv.lower", lower)
+        appsettings.set_value("ball_hsv.upper", upper)
+        # Detector reads custom HSV automatically on next frame
 EOF
 
-# 4) Add a tiny swatch util (optional; we render in picker already) — no change to draw_utils needed
-
-# 5) Wire into main.py: 'b' toggles color pick; pause processing while active; reuses new HSV immediately
-#    (We assume your current main.py already has sliders/calibration/cooldown/etc. from prior scripts.)
-#    We'll patch main.py wholesale for consistency with the latest features.
+# Patch main.py to use the new slider-based picker (open/close & commit on close)
 cat > src/main.py << 'EOF'
 import time
 import cv2
@@ -368,7 +222,7 @@ def main():
     cal = CalibrationEditor()
     picker = ColorPicker("PuttTracker")
 
-    log("Controls: q=quit | m=mask | a=settings | c=calibrate | b=pick ball color")
+    log("Controls: q=quit | m=mask | a=settings | c=calibrate | b=pick ball color (sliders)")
     last_pos = None
     last_inside = False
     last_valid_velocity = None
@@ -404,9 +258,11 @@ def main():
                     "Adjust ROI & settings in 'PuttTracker Settings'",
                     "a: close sliders | c: calibration | b: color pick | q: quit"
                 ])
+
             if cal.active:
                 L = s["calibration"]["line"]
                 draw_calibration_line(frame, L)
+                from ui.calibration_editor import compute_px_per_yard
                 ppy = compute_px_per_yard()
                 txt = f"CALIBRATION: px/yd={ppy:.2f}" if ppy else "CALIBRATION: adjust line to yardstick"
                 banner(frame, txt)
@@ -415,8 +271,10 @@ def main():
                     "Use 'yards_len x10' if your stick != 1.0 yd",
                     "Press 'c' to close and save, then resume"
                 ])
+
             if picker.active:
                 picker.render_overlay(frame)
+
             draw_status_dot(frame, 'yellow')
 
         else:
@@ -496,6 +354,7 @@ def main():
             editor.toggle(w0, h0)
         elif key == ord('c'):
             if cal.active:
+                from ui.calibration_editor import compute_px_per_yard
                 ppy = compute_px_per_yard()
                 if ppy:
                     appsettings.set_value("calibration.px_per_yard", float(ppy))
@@ -504,13 +363,14 @@ def main():
             else:
                 cal.toggle(w0, h0)
         elif key == ord('b'):
-            # Open/close picker; when opening, pass current frame to sample from
+            # Toggle slider picker; on close, sample & save from current frame
             if picker.active:
-                picker.close()
+                picker.commit(frame)
+                picker.toggle(w0, h0)  # close
+                log("Ball color saved from slider picker.")
             else:
-                picker.open(w0, h0, frame)
+                picker.toggle(w0, h0)  # open
 
-    # Cleanup
     editor.close(); cal.close(); picker.close()
     cv2.destroyAllWindows()
 
@@ -518,4 +378,4 @@ if __name__ == "__main__":
     main()
 EOF
 
-echo "✅ Click-to-pick color added. Press 'b', click the ball, swatch shows; saved HSV used for tracking."
+echo "✅ Slider-based color picker added. Press 'b' to open/close; dot follows sliders; color saved on close."

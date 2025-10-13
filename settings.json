@@ -28,7 +28,15 @@
     "timeout_sec": 2.5
   },
   "ball_hsv": {
-    "lower": null,
-    "upper": null
+    "lower": [
+      23,
+      161,
+      172
+    ],
+    "upper": [
+      47,
+      255,
+      255
+    ]
   }
 }
