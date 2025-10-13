@@ -4,10 +4,10 @@
   "show_mask": false,
   "target_width": 960,
   "roi": {
-    "startx": 495,
-    "endx": 1597,
-    "starty": 451,
-    "endy": 998
+    "startx": 528,
+    "endx": 1015,
+    "starty": 539,
+    "endy": 1080
   },
   "calibration": {
     "px_per_yard": 1103.6779141903696,
