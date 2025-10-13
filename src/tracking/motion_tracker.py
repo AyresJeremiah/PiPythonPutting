@@ -8,10 +8,15 @@ class MotionTracker:
         self._fps_time = time.time()
         self._frames = 0
         self._fps = None
+        self._dt_override = None  # override delta-time when using video
 
     @property
     def fps(self):
         return self._fps
+
+    def set_dt_override(self, dt):
+        self._dt_override = dt  # None disables override
+
 
     def reset(self):
         """Clear state so velocity/dir don’t spike after unpausing."""
@@ -45,7 +50,7 @@ class MotionTracker:
         (x2, y2) = position
         dx = x2 - x1
         dy = y2 - y1
-        dt = current_time - self.last_time
+        dt = self._dt_override if self._dt_override else (current_time - self.last_time)
         if dt <= 0:
             return None, None
 

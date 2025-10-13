@@ -1,4 +1,5 @@
 import time
+import math
 import cv2
 import requests
 from tracking.ball_detector import BallDetector
@@ -33,18 +34,13 @@ def to_real_units(px_velocity, px_per_yard):
     if px_velocity is None or px_per_yard is None or px_per_yard <= 0:
         return None, None
     yds_per_s = px_velocity / px_per_yard
-    mph = yds_per_s * (3600.0/1760.0)
+    mph = yds_per_s * (3600.0 / 1760.0)
     return yds_per_s, mph
 
 def post_shot(mph, yds_per_s, direction):
     """
     Send shot data to the server defined in settings.json -> post.{host,port,path,timeout_sec}.
-    Args:
-        mph (float|None): Ball speed in mph (will be formatted to 2 decimals; None -> "0.00").
-        yds_per_s (float|None): Not sent today, but kept for future use.
-        direction (float|None): Horizontal launch angle in degrees (your HLA), 2 decimals; None -> "0.00".
-    Returns:
-        (ok: bool, response_json: dict|None)
+    Returns: (ok: bool, response_json: dict|None)
     """
     s = appsettings.load()
     post_cfg = s.get("post", {})
@@ -57,7 +53,6 @@ def post_shot(mph, yds_per_s, direction):
     port = int(post_cfg.get("port", 8888))
     path = post_cfg.get("path", "/putting")
     timeout = float(post_cfg.get("timeout_sec", 2.5))
-
     url = f"http://{host}:{port}{path}"
 
     payload = {
@@ -71,7 +66,6 @@ def post_shot(mph, yds_per_s, direction):
     try:
         res = requests.post(url, json=payload, timeout=timeout)
         res.raise_for_status()
-        # Try to parse JSON (server may return plain text)
         try:
             data = res.json()
         except ValueError:
@@ -84,7 +78,6 @@ def post_shot(mph, yds_per_s, direction):
         log(f"HTTP error posting shot -> {url}: {e}")
     except requests.exceptions.RequestException as e:
         log(f"Request error posting shot -> {url}: {e}")
-
     return False, None
 
 def main():
@@ -93,9 +86,41 @@ def main():
     target_w = int(s.get("target_width", 960))
     min_report_mph = float(s.get("min_report_mph", 1.0))
 
-    camera = Camera(source=0)
+    # --- Camera from settings.input (camera or video with loop) ---
+    inp = s.get("input", {})
+    src_mode = inp.get("source", "camera")
+    if src_mode == "video":
+        video_path = inp.get("video_path", "testdata/my_putt.mp4")
+        loop_flag = bool(inp.get("loop", True))
+        camera = Camera(source=video_path, loop=loop_flag)
+    else:
+        camera = Camera(source=0)
+
     detector = BallDetector()
     tracker = MotionTracker()
+    # Use video FPS for timing when source=video, for correct speeds
+    is_video = (inp.get("source") == "video")
+    vid_fps = 30.0
+    wait_ms = 1
+    if is_video:
+        cap_tmp = cv2.VideoCapture(inp.get("video_path", "testdata/my_putt.mp4"))
+        vid_fps = cap_tmp.get(cv2.CAP_PROP_FPS) or 30.0
+        cap_tmp.release()
+        try:
+            tracker.set_dt_override(1.0 / float(vid_fps))
+        except Exception:
+            pass
+        # throttle UI loop to video FPS
+        try:
+            wait_ms = max(1, int(round(1000.0 / float(vid_fps))))
+        except Exception:
+            wait_ms = 33
+    else:
+        try:
+            tracker.set_dt_override(None)
+        except Exception:
+            pass
+        wait_ms = 1
 
     # Prime first frame; initialize ROI
     frame_iter = camera.stream()
@@ -152,7 +177,6 @@ def main():
             if cal.active:
                 L = s["calibration"]["line"]
                 draw_calibration_line(frame, L)
-                from ui.calibration_editor import compute_px_per_yard
                 ppy = compute_px_per_yard()
                 txt = f"CALIBRATION: px/yd={ppy:.2f}" if ppy else "CALIBRATION: adjust line to yardstick"
                 banner(frame, txt)
@@ -168,7 +192,7 @@ def main():
             draw_status_dot(frame, 'yellow')
 
         else:
-            in_cooldown = (now - last_shot_time) < 1.0
+            in_cooldown = (now - last_shot_time) < COOLDOWN_SEC
 
             if in_cooldown:
                 tracker.reset()
@@ -197,10 +221,12 @@ def main():
                         sending_now = True
                         draw_status_dot(frame, 'red')
                         cv2.imshow("PuttTracker", resize_keep_aspect(frame, target_w))
-                        cv2.waitKey(1)
-                        _ = post_shot(mph_exit if mph_exit is not None else 0.0,
-                                      yps_exit if yps_exit is not None else 0.0,
-                                      last_valid_direction if last_valid_direction is not None else 0.0)
+                        cv2.waitKey(wait_ms)
+                        _ = post_shot(
+                            mph_exit if mph_exit is not None else 0.0,
+                            yps_exit if yps_exit is not None else 0.0,
+                            last_valid_direction if last_valid_direction is not None else 0.0
+                        )
                         sending_now = False
                         last_shot_time = time.time()
                     else:
@@ -212,12 +238,14 @@ def main():
                 draw_roi(frame, roi)
                 if in_area:
                     draw_vector(frame, last_pos, center)
-                put_hud(frame,
-                        velocity if in_area else None,
-                        direction if in_area else None,
-                        tracker.fps,
-                        mph=mph if in_area else None,
-                        yds=yds_per_s if in_area else None)
+                put_hud(
+                    frame,
+                    velocity if in_area else None,
+                    direction if in_area else None,
+                    tracker.fps,
+                    mph=mph if in_area else None,
+                    yds=yds_per_s if in_area else None
+                )
 
                 if show_mask and detector.last_mask is not None:
                     mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
@@ -235,7 +263,7 @@ def main():
         preview = resize_keep_aspect(frame, target_w)
         cv2.imshow("PuttTracker", preview)
 
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(wait_ms) & 0xFF
         if key == ord('q'):
             break
         elif key == ord('m'):
@@ -244,7 +272,6 @@ def main():
             editor.toggle(w0, h0)
         elif key == ord('c'):
             if cal.active:
-                from ui.calibration_editor import compute_px_per_yard
                 ppy = compute_px_per_yard()
                 if ppy:
                     appsettings.set_value("calibration.px_per_yard", float(ppy))

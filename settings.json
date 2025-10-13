@@ -1,13 +1,13 @@
 {
   "ball_color": "white",
-  "min_ball_radius_px": 1,
+  "min_ball_radius_px": 3,
   "show_mask": false,
   "target_width": 960,
   "roi": {
-    "startx": 528,
-    "endx": 1015,
-    "starty": 539,
-    "endy": 1080
+    "startx": 221,
+    "endx": 558,
+    "starty": 559,
+    "endy": 968
   },
   "calibration": {
     "px_per_yard": 1103.6779141903696,
@@ -38,5 +38,10 @@
       80,
       255
     ]
+  },
+  "input": {
+    "source": "video",
+    "video_path": "testdata/left_bright.mp4",
+    "loop": true
   }
 }
