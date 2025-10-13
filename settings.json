@@ -4,10 +4,10 @@
   "show_mask": false,
   "target_width": 960,
   "roi": {
-    "startx": 519,
-    "endx": 919,
-    "starty": 516,
-    "endy": 1080
+    "startx": 495,
+    "endx": 1597,
+    "starty": 451,
+    "endy": 998
   },
   "calibration": {
     "px_per_yard": 1103.6779141903696,
@@ -29,12 +29,12 @@
   },
   "ball_hsv": {
     "lower": [
-      23,
+      21,
       161,
       172
     ],
     "upper": [
-      47,
+      45,
       255,
       255
     ]
