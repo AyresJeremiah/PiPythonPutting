@@ -26,5 +26,9 @@
     "port": 8888,
     "path": "/putting",
     "timeout_sec": 2.5
+  },
+  "ball_hsv": {
+    "lower": null,
+    "upper": null
   }
 }

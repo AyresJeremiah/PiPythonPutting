@@ -11,6 +11,7 @@ from utils.logger import log
 import settings as appsettings
 from ui.slider_editor import SliderEditor
 from ui.calibration_editor import CalibrationEditor, compute_px_per_yard
+from ui.color_picker import ColorPicker
 
 COOLDOWN_SEC = 1.0  # delay after a shot before tracking again
 
@@ -75,7 +76,7 @@ def main():
     detector = BallDetector()
     tracker = MotionTracker()
 
-    # Prime first frame; initialize ROI; do NOT pause at start
+    # Prime first frame; initialize ROI
     frame_iter = camera.stream()
     first_frame = next(frame_iter)
     h0, w0 = first_frame.shape[:2]
@@ -88,14 +89,15 @@ def main():
     cv2.namedWindow("PuttTracker", cv2.WINDOW_NORMAL)
     editor = SliderEditor()
     cal = CalibrationEditor()
+    picker = ColorPicker("PuttTracker")
 
-    log("Controls: q=quit | m=mask | a=settings sliders | c=calibrate (yardstick)")
+    log("Controls: q=quit | m=mask | a=settings | c=calibrate | b=pick ball color")
     last_pos = None
     last_inside = False
     last_valid_velocity = None
     last_valid_direction = None
     last_shot_time = 0.0
-    sending_now = False  # for status dot
+    sending_now = False
 
     def yield_with_first(first, gen):
         yield first
@@ -109,12 +111,11 @@ def main():
         roi = (int(s["roi"]["startx"]), int(s["roi"]["starty"]), int(s["roi"]["endx"]), int(s["roi"]["endy"]))
         min_report_mph = float(s.get("min_report_mph", min_report_mph))
         px_per_yard = s["calibration"]["px_per_yard"]
-        paused = editor.active or cal.active
 
+        paused = editor.active or cal.active or picker.active
         now = time.time()
 
         if paused:
-            # paused UI + status
             tracker.reset()
             last_pos = None
             last_inside = False
@@ -124,7 +125,7 @@ def main():
                 banner(frame, "SLIDER EDIT MODE (processing paused)")
                 help_box(frame, [
                     "Adjust ROI & settings in 'PuttTracker Settings'",
-                    "a: close sliders | c: calibration | q: quit"
+                    "a: close sliders | c: calibration | b: color pick | q: quit"
                 ])
             if cal.active:
                 L = s["calibration"]["line"]
@@ -137,14 +138,14 @@ def main():
                     "Use 'yards_len x10' if your stick != 1.0 yd",
                     "Press 'c' to close and save, then resume"
                 ])
-            # status: paused -> yellow
+            if picker.active:
+                picker.render_overlay(frame)
             draw_status_dot(frame, 'yellow')
 
         else:
-            in_cooldown = (now - last_shot_time) < COOLDOWN_SEC
+            in_cooldown = (now - last_shot_time) < 1.0
 
             if in_cooldown:
-                # Cooldown: don't update tracker with new positions
                 tracker.reset()
                 draw_roi(frame, roi)
                 banner(frame, "COOLDOWN...")
@@ -160,44 +161,38 @@ def main():
 
                 yds_per_s, mph = to_real_units(velocity, px_per_yard)
 
-                # Exit event: was inside, now outside (and not in cooldown)
                 if last_inside and not in_area and last_valid_velocity is not None:
                     yps_exit, mph_exit = to_real_units(last_valid_velocity, px_per_yard)
-                    # Threshold gate
                     if mph_exit is None or mph_exit >= min_report_mph:
-                        # Log shot
                         if mph_exit is not None:
                             log(f"SHOT: {mph_exit:.1f} mph ({yps_exit:.2f} yd/s) dir={last_valid_direction:.2f}° (exited ROI)")
                         else:
                             log(f"SHOT: vel={last_valid_velocity:.2f} px/s, dir={last_valid_direction:.2f}° (exited ROI)")
-                        # HTTP POST (blocking; mark status red while sending)
+                        # POST
                         sending_now = True
                         draw_status_dot(frame, 'red')
                         cv2.imshow("PuttTracker", resize_keep_aspect(frame, target_w))
                         cv2.waitKey(1)
-                        ok = post_shot(mph_exit if mph_exit is not None else 0.0,
-                                       yps_exit if yps_exit is not None else 0.0,
-                                       last_valid_direction if last_valid_direction is not None else 0.0)
+                        _ = post_shot(mph_exit if mph_exit is not None else 0.0,
+                                      yps_exit if yps_exit is not None else 0.0,
+                                      last_valid_direction if last_valid_direction is not None else 0.0)
                         sending_now = False
-                        last_shot_time = time.time()  # start cooldown
+                        last_shot_time = time.time()
                     else:
                         log(f"IGNORED (under {min_report_mph:.1f} mph): {mph_exit if mph_exit is not None else 0.0:.1f} mph")
-                        last_shot_time = time.time()  # still start cooldown to avoid spam
+                        last_shot_time = time.time()
                 last_inside = in_area
 
-                # Overlays and status
                 draw_ball(frame, center if in_area else None, radius if in_area and radius else 0.0)
                 draw_roi(frame, roi)
                 if in_area:
                     draw_vector(frame, last_pos, center)
-                put_hud(
-                    frame,
-                    velocity if in_area else None,
-                    direction if in_area else None,
-                    tracker.fps,
-                    mph=mph if in_area else None,
-                    yds=yds_per_s if in_area else None
-                )
+                put_hud(frame,
+                        velocity if in_area else None,
+                        direction if in_area else None,
+                        tracker.fps,
+                        mph=mph if in_area else None,
+                        yds=yds_per_s if in_area else None)
 
                 if show_mask and detector.last_mask is not None:
                     mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
@@ -205,7 +200,6 @@ def main():
                     roi_small = frame[0:mh, 0:mw]
                     cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
 
-                # status: green if ball in view & inside ROI; yellow if not found
                 if center is None:
                     draw_status_dot(frame, 'yellow')
                 else:
@@ -213,13 +207,8 @@ def main():
 
                 last_pos = center if in_area else last_pos
 
-        # Present and input
         preview = resize_keep_aspect(frame, target_w)
-        if sending_now:
-            # already displayed a frame just before POST; still update
-            cv2.imshow("PuttTracker", preview)
-        else:
-            cv2.imshow("PuttTracker", preview)
+        cv2.imshow("PuttTracker", preview)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -227,7 +216,7 @@ def main():
         elif key == ord('m'):
             appsettings.set_value("show_mask", not bool(s.get("show_mask", False)))
         elif key == ord('a'):
-            editor.toggle(w0, h0)   # opens with existing values (no reset)
+            editor.toggle(w0, h0)
         elif key == ord('c'):
             if cal.active:
                 ppy = compute_px_per_yard()
@@ -237,8 +226,15 @@ def main():
                 cal.toggle(w0, h0)
             else:
                 cal.toggle(w0, h0)
+        elif key == ord('b'):
+            # Open/close picker; when opening, pass current frame to sample from
+            if picker.active:
+                picker.close()
+            else:
+                picker.open(w0, h0, frame)
 
-    editor.close(); cal.close()
+    # Cleanup
+    editor.close(); cal.close(); picker.close()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
