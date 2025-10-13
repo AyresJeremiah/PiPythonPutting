@@ -1,3 +1,12 @@
+#!/bin/bash
+set -e
+
+if [ ! -f "src/main.py" ]; then
+  echo "Run this from your project root (where src/main.py exists)."
+  exit 1
+fi
+
+cat > src/main.py << 'EOF'
 import cv2
 from tracking.ball_detector import BallDetector
 from tracking.motion_tracker import MotionTracker
@@ -178,3 +187,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+EOF
+
+echo "✅ Updated main.py: calibration line now only shows during calibration, no auto-recompute during normal run."

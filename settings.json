@@ -2,12 +2,12 @@
   "ball_color": "white",
   "min_ball_radius_px": 3,
   "show_mask": false,
-  "target_width": 960,
+  "target_width": 1464,
   "roi": {
-    "startx": 530,
-    "endx": 818,
-    "starty": 559,
-    "endy": 1007
+    "startx": 586,
+    "endx": 1056,
+    "starty": 505,
+    "endy": 1019
   },
   "calibration": {
     "px_per_yard": 1103.6779141903696,
