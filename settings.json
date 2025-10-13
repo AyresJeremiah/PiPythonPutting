@@ -19,7 +19,7 @@
       "y2": 46
     }
   },
-  "min_report_mph": 0.2,
+  "min_report_mph": 0.05,
   "post": {
     "enabled": true,
     "host": "10.10.10.23",
