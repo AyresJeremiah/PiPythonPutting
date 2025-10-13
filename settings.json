@@ -8,5 +8,15 @@
     "endx": 921,
     "starty": 361,
     "endy": 891
+  },
+  "calibration": {
+    "px_per_yard": null,
+    "yards_length": 1.0,
+    "line": {
+      "x1": 100,
+      "y1": 100,
+      "x2": 400,
+      "y2": 100
+    }
   }
 }

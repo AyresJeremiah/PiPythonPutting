@@ -9,6 +9,11 @@ _DEFAULTS: Dict[str, Any] = {
     "show_mask": False,
     "target_width": 960,
     "roi": {"startx": None, "endx": None, "starty": None, "endy": None},
+    "calibration": {
+        "px_per_yard": None,
+        "yards_length": 1.0,
+        "line": {"x1": 100, "y1": 100, "x2": 400, "y2": 100}
+    }
 }
 
 _cache: Dict[str, Any] = None
@@ -81,4 +86,16 @@ def clamp_roi(width: int, height: int):
         r["endx"] = min(width, r["startx"] + 1)
     if r["starty"] >= r["endy"]:
         r["endy"] = min(height, r["starty"] + 1)
+    save()
+
+# ---- Calibration helpers ----
+def clamp_calibration(width:int, height:int):
+    s = load()
+    L = s["calibration"]["line"]
+    for k in ("x1","x2"):
+        L[k] = max(0, min(int(L[k]), width-1))
+    for k in ("y1","y2"):
+        L[k] = max(0, min(int(L[k]), height-1))
+    yl = float(s["calibration"].get("yards_length", 1.0))
+    if yl <= 0: s["calibration"]["yards_length"] = 1.0
     save()
