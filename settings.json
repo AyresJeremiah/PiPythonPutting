@@ -1,0 +1,12 @@
+{
+  "ball_color": "white",
+  "min_ball_radius_px": 3,
+  "show_mask": false,
+  "target_width": 960,
+  "roi": {
+    "startx": 450,
+    "endx": 450,
+    "starty": 262,
+    "endy": 262
+  }
+}
