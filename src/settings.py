@@ -8,7 +8,6 @@ _DEFAULTS: Dict[str, Any] = {
     "min_ball_radius_px": 3,
     "show_mask": False,
     "target_width": 960,
-    # ROI in absolute pixels; if null, will be set to full frame on first run
     "roi": {"startx": None, "endx": None, "starty": None, "endy": None},
 }
 
@@ -43,6 +42,16 @@ def save():
     with open(SETTINGS_PATH, "w") as f:
         json.dump(_cache, f, indent=2)
 
+def set_value(path, value):
+    """path like 'show_mask' or 'roi.startx'."""
+    s = load()
+    parts = path.split(".")
+    ref = s
+    for p in parts[:-1]:
+        ref = ref[p]
+    ref[parts[-1]] = value
+    save()
+
 def set_roi(x1, y1, x2, y2):
     s = load()
     s["roi"]["startx"] = int(min(x1, x2))
@@ -60,3 +69,16 @@ def ensure_roi_initialized(width: int, height: int):
         roi["endx"]   = int(width)
         roi["endy"]   = int(height)
         save()
+
+def clamp_roi(width: int, height: int):
+    s = load()
+    r = s["roi"]
+    r["startx"] = max(0, min(int(r["startx"]), width-1))
+    r["endx"]   = max(1, min(int(r["endx"]), width))
+    r["starty"] = max(0, min(int(r["starty"]), height-1))
+    r["endy"]   = max(1, min(int(r["endy"]), height))
+    if r["startx"] >= r["endx"]:
+        r["endx"] = min(width, r["startx"] + 1)
+    if r["starty"] >= r["endy"]:
+        r["endy"] = min(height, r["starty"] + 1)
+    save()

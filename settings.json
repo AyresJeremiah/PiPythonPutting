@@ -4,9 +4,9 @@
   "show_mask": false,
   "target_width": 960,
   "roi": {
-    "startx": 450,
-    "endx": 450,
-    "starty": 262,
-    "endy": 262
+    "startx": 482,
+    "endx": 921,
+    "starty": 361,
+    "endy": 891
   }
 }

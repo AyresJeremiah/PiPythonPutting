@@ -13,6 +13,11 @@ class MotionTracker:
     def fps(self):
         return self._fps
 
+    def reset(self):
+        """Clear state so velocity/dir don’t spike after unpausing."""
+        self.last_position = None
+        self.last_time = None
+
     def _tick_fps(self):
         self._frames += 1
         now = time.time()

@@ -5,7 +5,7 @@ from camera.capture import Camera
 from utils.draw_utils import draw_ball, draw_vector, put_hud, draw_roi, banner, help_box
 from utils.logger import log
 import settings as appsettings
-from config import COLOR_RANGES  # keep ranges in config.py
+from ui.slider_editor import SliderEditor
 
 def resize_keep_aspect(frame, target_w):
     h, w = frame.shape[:2]
@@ -21,47 +21,6 @@ def inside_roi(pt, roi):
     x1, y1, x2, y2 = roi
     return x1 <= x <= x2 and y1 <= y <= y2
 
-class ROIEditor:
-    def __init__(self, window_name):
-        self.window = window_name
-        self.editing = False
-        self.drawing = False
-        self.x1 = self.y1 = self.x2 = self.y2 = 0
-
-    def start(self, frame, roi):
-        self.editing = True
-        self.drawing = False
-        if roi:
-            self.x1, self.y1, self.x2, self.y2 = roi
-        cv2.setMouseCallback(self.window, self._on_mouse)
-
-    def stop(self):
-        self.editing = False
-        cv2.setMouseCallback(self.window, lambda *args: None)
-
-    def _on_mouse(self, event, x, y, flags, param):
-        if not self.editing:
-            return
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.drawing = True
-            self.x1, self.y1 = x, y
-            self.x2, self.y2 = x, y
-        elif event == cv2.EVENT_MOUSEMOVE and self.drawing:
-            self.x2, self.y2 = x, y
-        elif event == cv2.EVENT_LBUTTONUP and self.drawing:
-            self.drawing = False
-            self.x2, self.y2 = x, y
-            # persist immediately
-            appsettings.set_roi(self.x1, self.y1, self.x2, self.y2)
-            log(f"ROI set to x:[{min(self.x1,self.x2)}, {max(self.x1,self.x2)}] "
-                f"y:[{min(self.y1,self.y2)}, {max(self.y1,self.y2)}]")
-
-    def current(self):
-        if self.x1==self.x2 or self.y1==self.y2:
-            return None
-        return (min(self.x1, self.x2), min(self.y1, self.y2),
-                max(self.x1, self.x2), max(self.y1, self.y2))
-
 def main():
     s = appsettings.load()
     show_mask = bool(s.get("show_mask", False))
@@ -71,23 +30,24 @@ def main():
     detector = BallDetector()
     tracker = MotionTracker()
 
-    # Initialize ROI based on first frame size if needed
+    # Prime first frame to know bounds
     first_frame = next(camera.stream())
     h0, w0 = first_frame.shape[:2]
     appsettings.ensure_roi_initialized(w0, h0)
+    appsettings.clamp_roi(w0, h0)
     s = appsettings.load()
     roi = (int(s["roi"]["startx"]), int(s["roi"]["starty"]), int(s["roi"]["endx"]), int(s["roi"]["endy"]))
 
     cv2.namedWindow("PuttTracker", cv2.WINDOW_NORMAL)
-    editor = ROIEditor("PuttTracker")
+    editor = SliderEditor()
 
-    log("Controls: q=quit | m=mask | a=ROI editor (click-drag, auto-save)")
+    log("Controls: q=quit | m=mask | a=settings sliders")
     last_pos = None
     last_inside = False
     last_valid_velocity = None
     last_valid_direction = None
 
-    # Re-use the first frame we already pulled
+    # Iterate with first frame included
     frame_iter = camera.stream()
     def yield_with_first(first, gen):
         yield first
@@ -95,50 +55,57 @@ def main():
             yield f
 
     for frame in yield_with_first(first_frame, frame_iter):
-        # Re-load settings in case user edited externally
         s = appsettings.load()
         show_mask = bool(s.get("show_mask", show_mask))
         target_w = int(s.get("target_width", target_w))
         roi = (int(s["roi"]["startx"]), int(s["roi"]["starty"]), int(s["roi"]["endx"]), int(s["roi"]["endy"]))
 
-        center, radius = detector.detect(frame)
-        in_area = inside_roi(center, roi)
+        paused = editor.active  # <- when sliders are open, pause processing
 
-        velocity, direction = tracker.update(center if in_area else None)
-        if velocity is not None:
-            last_valid_velocity = velocity
-            last_valid_direction = direction
+        if paused:
+            # Ensure clean resume (no velocity spikes or stale “inside” state)
+            tracker.reset()
+            last_pos = None
+            last_inside = False
 
-        # EXIT EVENT: was inside, now outside (or lost)
-        if last_inside and not in_area:
-            if last_valid_velocity is not None:
-                log(f"SHOT: vel={last_valid_velocity:.2f} px/s, dir={last_valid_direction:.2f}° (exited ROI)")
-        last_inside = in_area
-
-        # Overlays
-        draw_ball(frame, center if in_area else None, radius if in_area and radius else 0.0)
-        draw_roi(frame, roi)
-        if in_area:
-            draw_vector(frame, last_pos, center)
-        put_hud(frame, velocity if in_area else None, direction if in_area else None, tracker.fps)
-
-        if show_mask and detector.last_mask is not None:
-            mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
-            mh, mw = mask.shape[:2]
-            roi_small = frame[0:mh, 0:mw]
-            cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
-
-        if editor.editing:
-            banner(frame, "ROI EDIT MODE")
+            # Just draw UI hints + ROI box; skip detection/tracking/logging
+            draw_roi(frame, roi)
+            banner(frame, "SLIDER EDIT MODE (processing paused)")
             help_box(frame, [
-                "Mouse: click-drag to set ROI (auto-saves)",
-                "a: exit edit mode",
+                "Adjust ROI & settings in the sliders window",
+                "Press 'a' to close sliders and resume",
                 "m: toggle mask | q: quit"
             ])
-            # also preview the current drag rect if any
-            cur = editor.current()
-            if cur:
-                draw_roi(frame, cur, color=(0,255,255), thickness=2)
+        else:
+            # Normal processing
+            center, radius = detector.detect(frame)
+            in_area = inside_roi(center, roi)
+
+            velocity, direction = tracker.update(center if in_area else None)
+            if velocity is not None:
+                last_valid_velocity = velocity
+                last_valid_direction = direction
+
+            # Exit event: was inside, now outside
+            if last_inside and not in_area:
+                if last_valid_velocity is not None:
+                    log(f"SHOT: vel={last_valid_velocity:.2f} px/s, dir={last_valid_direction:.2f}° (exited ROI)")
+            last_inside = in_area
+
+            # Overlays
+            draw_ball(frame, center if in_area else None, radius if in_area and radius else 0.0)
+            draw_roi(frame, roi)
+            if in_area:
+                draw_vector(frame, last_pos, center)
+            put_hud(frame, velocity if in_area else None, direction if in_area else None, tracker.fps)
+
+            if show_mask and detector.last_mask is not None:
+                mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
+                mh, mw = mask.shape[:2]
+                roi_small = frame[0:mh, 0:mw]
+                cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
+
+            last_pos = center if in_area else last_pos
 
         preview = resize_keep_aspect(frame, target_w)
         cv2.imshow("PuttTracker", preview)
@@ -147,16 +114,14 @@ def main():
         if key == ord('q'):
             break
         elif key == ord('m'):
-            s["show_mask"] = not bool(s.get("show_mask", False))
-            appsettings.save()
+            appsettings.set_value("show_mask", not bool(s.get("show_mask", False)))
         elif key == ord('a'):
-            if editor.editing:
-                editor.stop()
-            else:
-                editor.start(frame, roi)
+            # Toggle sliders; processing will pause/resume automatically
+            editor.toggle(w0, h0)
 
         last_pos = center if in_area else last_pos
 
+    editor.close()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
