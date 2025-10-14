@@ -1,4 +1,6 @@
 import time, math, cv2, requests, numpy as np
+
+from src.services.gspro import post_shot
 from tracking.ball_detector import BallDetector
 from tracking.motion_tracker import MotionTracker
 from camera.capture import Camera
@@ -14,18 +16,13 @@ from utils.runtime_cfg import set_cfg
 COOLDOWN_SEC = 1.0
 LOST_FRAMES_LIMIT = 6
 
-def resize_keep_aspect(frame, target_w):
-    h, w = frame.shape[:2]
-    if w == 0 or h == 0:
-        return frame
-    scale = target_w / float(w)
-    return cv2.resize(frame, (int(w * scale), int(h * scale)))
 
 def rect_contains(pt, rect):
     if pt is None or rect is None:
         return False
     x, y = pt
     return rect["x1"] <= x <= rect["x2"] and rect["y1"] <= y <= rect["y2"]
+
 
 def rect_union(a, b):
     return {
@@ -34,6 +31,7 @@ def rect_union(a, b):
         "x2": max(int(a["x2"]), int(b["x2"])),
         "y2": max(int(a["y2"]), int(b["y2"]))
     }
+
 
 def clamp_rect(rc, w, h):
     rc["x1"] = max(0, min(int(rc["x1"]), w - 1))
@@ -45,12 +43,14 @@ def clamp_rect(rc, w, h):
     if rc["y1"] >= rc["y2"]:
         rc["y2"] = min(h, rc["y1"] + 1)
 
+
 def to_real_units(px_velocity, px_per_yard):
     if px_velocity is None or not px_per_yard or px_per_yard <= 0:
         return None, None
     yps = px_velocity / px_per_yard
     mph = yps * (3600.0 / 1760.0)
     return yps, mph
+
 
 def compute_hla(last_pos, cur_pos):
     if last_pos is None or cur_pos is None:
@@ -61,30 +61,6 @@ def compute_hla(last_pos, cur_pos):
     hla = max(-60.0, min(60.0, -heading))  # left -, right +
     return hla
 
-def post_shot(mph, yps, direction, cfg):
-    post = cfg.get("post", {})
-    if not post.get("enabled", True):
-        return False, None
-    url = f"http://{post.get('host','10.10.10.23')}:{int(post.get('port',8888))}{post.get('path','/putting')}"
-    payload = {
-        "ballData": {
-            "BallSpeed": f"{(mph or 0.0):.2f}",
-            "TotalSpin": 0,
-            "LaunchDirection": f"{(direction or 0.0):.2f}"
-        }
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=float(post.get("timeout_sec", 2.5)))
-        r.raise_for_status()
-        try:
-            data = r.json()
-        except ValueError:
-            data = None
-        log(f"POST OK -> {url} | {payload}")
-        return True, data
-    except requests.exceptions.RequestException as e:
-        log(f"POST error -> {e}")
-        return False, None
 
 def main():
     cv2.setNumThreads(1)
@@ -92,13 +68,12 @@ def main():
     # === LOAD SETTINGS ONCE ===
     cfg = appsettings.load()
     set_cfg(cfg)  # make cfg available app-wide (no more disk loads)
-    show_mask   = bool(cfg.get("show_mask", False))
-    target_w    = int(cfg.get("target_width", 960))
-    min_mph     = float(cfg.get("min_report_mph", 1.0))
-    inp         = cfg.get("input", {})
-    px_per_yd   = cfg["calibration"]["px_per_yard"]
-    detect_cfg  = cfg.get("detect", {})
-    detect_scale= float(detect_cfg.get("scale", 0.75))
+    target_w = int(cfg.get("target_width", 960))
+    min_mph = float(cfg.get("min_report_mph", 1.0))
+    inp = cfg.get("input", {})
+    px_per_yd = cfg["calibration"]["px_per_yard"]
+    detect_cfg = cfg.get("detect", {})
+    detect_scale = float(detect_cfg.get("scale", 0.75))
     if detect_scale <= 0 or detect_scale > 1.0:
         detect_scale = 1.0
 
@@ -110,7 +85,7 @@ def main():
         camera = Camera(source=0)
 
     detector = BallDetector()
-    tracker  = MotionTracker()
+    tracker = MotionTracker()
 
     # Video timing (UI throttle) + physics dt
     is_video = (inp.get("source") == "video")
@@ -139,7 +114,7 @@ def main():
     ui.start()
 
     # First frame + zones (initialize defaults from current frame size)
-    frame_iter  = camera.stream()
+    frame_iter = camera.stream()
     first_frame = next(frame_iter)
     h0, w0 = first_frame.shape[:2]
     appsettings.ensure_roi_initialized(w0, h0)
@@ -153,16 +128,18 @@ def main():
 
     # --- Static zone overlay: draw once and reuse ---
     zone_overlay = np.zeros_like(first_frame)
+
     def rebuild_zone_overlay():
         nonlocal zone_overlay
         canvas = np.zeros_like(first_frame)
         draw_zone(canvas, cfg["zones"]["stage_roi"], "STAGE", (0, 200, 255))
         draw_zone(canvas, cfg["zones"]["track_roi"], "TRACK", (0, 180, 0))
         zone_overlay = canvas
+
     rebuild_zone_overlay()
 
     editor = SliderEditor()
-    cal    = CalibrationEditor()
+    cal = CalibrationEditor()
     picker = ColorPicker("PuttTracker")
 
     log("Controls: q quit | m mask | a settings | c calibrate | b color pick")
@@ -201,7 +178,7 @@ def main():
                 draw_calibration_line(disp, cfg["calibration"]["line"])
                 ppy = compute_px_per_yard()
                 cv2.putText(disp, f"px/yd preview: {ppy:.2f}" if ppy else "Calibrate line to yardstick",
-                            (12, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+                            (12, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
             if picker.active:
                 picker.render_overlay(disp)
 
@@ -387,12 +364,15 @@ def main():
         if is_video:
             time.sleep(wait_ms / 1000.0)
 
-    editor.close(); cal.close(); picker.close()
+    editor.close()
+    cal.close()
+    picker.close()
     try:
         ui.stop()
     except Exception:
         pass
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()
