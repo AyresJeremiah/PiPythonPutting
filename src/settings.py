@@ -4,8 +4,8 @@ from typing import Any, Dict
 SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
 
 _DEFAULTS: Dict[str, Any] = {
-    "ball_color": "white",                 # named fallback ('white', 'yellow', etc.)
-    "ball_hsv": {"lower": None, "upper": None},  # custom HSV overrides if set
+    "ball_color": "white",
+    "ball_hsv": {"lower": None, "upper": None},
     "min_ball_radius_px": 3,
     "show_mask": False,
     "target_width": 960,
@@ -22,6 +22,16 @@ _DEFAULTS: Dict[str, Any] = {
         "port": 8888,
         "path": "/putting",
         "timeout_sec": 2.5
+    },
+    "input": {
+        "source": "camera",               # or "video"
+        "video_path": "testdata/my_putt.mp4",
+        "loop": True
+    },
+    # NEW: Gate (cross) line that must be crossed to arm a shot
+    "gate": {
+        "enabled": True,
+        "line": {"x1": 100, "y1": 200, "x2": 500, "y2": 200}
     }
 }
 
@@ -57,7 +67,7 @@ def save():
         json.dump(_cache, f, indent=2)
 
 def set_value(path, value):
-    """path like 'show_mask' or 'roi.startx' or 'ball_hsv.lower'."""
+    """path like 'show_mask', 'roi.startx', 'ball_hsv.lower', 'post.host', 'gate.enabled'."""
     s = load()
     parts = path.split(".")
     ref = s
@@ -106,4 +116,25 @@ def clamp_calibration(width:int, height:int):
         L[k] = max(0, min(int(L[k]), height-1))
     yl = float(s["calibration"].get("yards_length", 1.0))
     if yl <= 0: s["calibration"]["yards_length"] = 1.0
+    save()
+
+# NEW: gate helpers
+def ensure_gate_initialized(width:int, height:int):
+    s = load()
+    g = s.get("gate", {})
+    L = g.get("line", {})
+    if not L or any(k not in L or L[k] is None for k in ("x1","y1","x2","y2")):
+        y = height // 2
+        s["gate"] = s.get("gate", {})
+        s["gate"]["enabled"] = True
+        s["gate"]["line"] = {"x1": 0, "y1": y, "x2": width-1, "y2": y}
+        save()
+
+def clamp_gate(width:int, height:int):
+    s = load()
+    L = s["gate"]["line"]
+    L["x1"] = max(0, min(int(L["x1"]), width-1))
+    L["x2"] = max(0, min(int(L["x2"]), width-1))
+    L["y1"] = max(0, min(int(L["y1"]), height-1))
+    L["y2"] = max(0, min(int(L["y2"]), height-1))
     save()
