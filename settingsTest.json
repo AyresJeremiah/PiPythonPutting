@@ -7,13 +7,13 @@
     "startx": 278,
     "endx": 968,
     "starty": 625,
-    "endy": 720
+    "endy": 926
   },
   "calibration": {
-    "px_per_yard": 325,
+    "px_per_yard": 1103.6779141903696,
     "yards_length": 0.9,
     "line": {
-      "x1": 750,
+      "x1": 487,
       "y1": 97,
       "x2": 1479,
       "y2": 46
@@ -29,19 +29,19 @@
   },
   "ball_hsv": {
     "lower": [
-      23,
+      91,
       0,
-      92
+      89
     ],
     "upper": [
-      47,
+      115,
       65,
-      232
+      229
     ]
   },
   "input": {
     "source": "video",
-    "video_path": "testdata/better.mp4",
+    "video_path": "testdata/right_bright.mp4",
     "loop": true
   },
   "gate": {
@@ -55,16 +55,16 @@
   },
   "zones": {
     "stage_roi": {
-      "x1": 286,
-      "y1": 403,
-      "x2": 500,
-      "y2": 720
+      "x1": 186,
+      "y1": 560,
+      "x2": 524,
+      "y2": 1026
     },
     "track_roi": {
-      "x1": 500,
-      "y1": 375,
-      "x2": 1280,
-      "y2": 720
+      "x1": 541,
+      "y1": 462,
+      "x2": 1454,
+      "y2": 1053
     }
   }
 }
