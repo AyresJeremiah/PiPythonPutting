@@ -21,7 +21,7 @@
   },
   "min_report_mph": 0.0,
   "post": {
-    "enabled": true,
+    "enabled": false,
     "host": "10.10.10.23",
     "port": 8888,
     "path": "/putting",
@@ -29,21 +29,22 @@
   },
   "ball_hsv": {
     "lower": [
-      17,
-      118,
-      0
+      29,
+      0,
+      80
     ],
     "upper": [
-      41,
-      238,
-      137
+      53,
+      64,
+      220
     ]
   },
   "input": {
     "source": "video",
     "playback_speed": 1,
     "video_path": "../testdata/better.mp4",
-    "loop": true
+    "loop": true,
+    "speed_affects_metrics": false
   },
   "gate": {
     "enabled": false,
@@ -56,7 +57,7 @@
   },
   "zones": {
     "stage_roi": {
-      "x1": 286,
+      "x1": 200,
       "y1": 403,
       "x2": 500,
       "y2": 914
