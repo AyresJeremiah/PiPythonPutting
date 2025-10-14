@@ -1,4 +1,5 @@
 import cv2
+from utils.runtime_cfg import get_cfg
 import numpy as np
 import settings as appsettings
 
@@ -28,7 +29,7 @@ class ColorPicker:
 
     def _sync_from_settings(self):
         # Try to initialize at ROI center if present
-        s = appsettings.load()
+        s = get_cfg()
         roi = s.get("roi", {})
         try:
             x1,y1,x2,y2 = int(roi["startx"]),int(roi["starty"]),int(roi["endx"]),int(roi["endy"])

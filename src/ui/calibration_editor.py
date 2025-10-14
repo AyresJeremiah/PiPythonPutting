@@ -1,4 +1,5 @@
 import cv2
+from utils.runtime_cfg import get_cfg
 import math
 import settings as appsettings
 
@@ -18,7 +19,7 @@ class CalibrationEditor:
 
     def _sync(self):
         appsettings.clamp_calibration(self._w, self._h)
-        s = appsettings.load()
+        s = get_cfg()
         L = s["calibration"]["line"]
         cv2.setTrackbarPos("x1", self.name, int(L["x1"]))
         cv2.setTrackbarPos("y1", self.name, int(L["y1"]))
@@ -37,7 +38,7 @@ class CalibrationEditor:
         appsettings.clamp_calibration(self._w, self._h)
         cv2.namedWindow(self.name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.name, 420, 260)
-        s = appsettings.load()
+        s = get_cfg()
         L = s["calibration"]["line"]
         cv2.createTrackbar("x1", self.name, int(L["x1"]), self._w-1, lambda v: self._on_x1(v))
         cv2.createTrackbar("y1", self.name, int(L["y1"]), self._h-1, lambda v: self._on_y1(v))
@@ -58,7 +59,7 @@ class CalibrationEditor:
         else: self.open(frame_width, frame_height)
 
 def compute_px_per_yard():
-    s = appsettings.load()
+    s = get_cfg()
     L = s["calibration"]["line"]
     yards_len = float(s["calibration"].get("yards_length", 1.0))
     if yards_len <= 0: return None

@@ -1,4 +1,5 @@
 import cv2
+from utils.runtime_cfg import get_cfg
 import numpy as np
 from config import COLOR_RANGES
 import settings as appsettings
@@ -12,7 +13,7 @@ class BallDetector:
         self.refresh_from_settings()
 
     def refresh_from_settings(self):
-        s = appsettings.load()
+        s = get_cfg()
         self.min_radius = int(s.get("min_ball_radius_px", 3))
         custom = s.get("ball_hsv", {"lower": None, "upper": None})
         if custom and custom.get("lower") and custom.get("upper"):

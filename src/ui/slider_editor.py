@@ -1,4 +1,5 @@
 import cv2
+from utils.runtime_cfg import get_cfg
 import settings as appsettings
 
 class SliderEditor:
@@ -49,7 +50,7 @@ class SliderEditor:
     def open(self, frame_width: int, frame_height: int):
         """Open window with sliders positioned to CURRENT settings."""
         self._w, self._h = int(frame_width), int(frame_height)
-        s = appsettings.load()
+        s = get_cfg()
 
         # Clamp current settings to frame so initial positions are valid
         st = s["zones"]["stage_roi"].copy()
