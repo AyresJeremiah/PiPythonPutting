@@ -8,6 +8,7 @@ import settings as appsettings
 from ui.slider_editor import SliderEditor
 from ui.calibration_editor import CalibrationEditor, compute_px_per_yard
 from ui.color_picker import ColorPicker
+from ui.preview import PreviewUI
 from utils.runtime_cfg import set_cfg
 
 COOLDOWN_SEC = 1.0
@@ -89,7 +90,7 @@ def main():
     cv2.setNumThreads(1)
 
     # === LOAD SETTINGS ONCE ===
-    cfg = appsettings.load()  # single read; no per-frame loads anywhere
+    cfg = appsettings.load()
     set_cfg(cfg)  # make cfg available app-wide (no more disk loads)
     show_mask   = bool(cfg.get("show_mask", False))
     target_w    = int(cfg.get("target_width", 960))
@@ -111,7 +112,7 @@ def main():
     detector = BallDetector()
     tracker  = MotionTracker()
 
-    # Video timing (UI throttle)
+    # Video timing (UI throttle) + physics dt
     is_video = (inp.get("source") == "video")
     wait_ms = 1
     if is_video:
@@ -133,6 +134,10 @@ def main():
         except Exception:
             pass
 
+    # ✅ Initialize UI AFTER is_video/wait_ms are computed
+    ui = PreviewUI(title="PuttTracker", target_width=target_w, wait_ms=(wait_ms if is_video else 1))
+    ui.start()
+
     # First frame + zones (initialize defaults from current frame size)
     frame_iter  = camera.stream()
     first_frame = next(frame_iter)
@@ -146,19 +151,16 @@ def main():
     stage = cfg["zones"]["stage_roi"]
     track = cfg["zones"]["track_roi"]
 
-    # --- Static zone overlay: draw once and reuse (only rebuild on change/reload) ---
+    # --- Static zone overlay: draw once and reuse ---
     zone_overlay = np.zeros_like(first_frame)
-
     def rebuild_zone_overlay():
         nonlocal zone_overlay
         canvas = np.zeros_like(first_frame)
         draw_zone(canvas, cfg["zones"]["stage_roi"], "STAGE", (0, 200, 255))
         draw_zone(canvas, cfg["zones"]["track_roi"], "TRACK", (0, 180, 0))
         zone_overlay = canvas
-
     rebuild_zone_overlay()
 
-    cv2.namedWindow("PuttTracker", cv2.WINDOW_NORMAL)
     editor = SliderEditor()
     cal    = CalibrationEditor()
     picker = ColorPicker("PuttTracker")
@@ -182,7 +184,6 @@ def main():
         if paused:
             frame = frozen_frame.copy()
 
-            # overlays reflect the single-load cfg (they won't move until next run)
             disp = frame.copy()
             # compose static zone overlay (drawn once)
             disp = cv2.add(disp, zone_overlay)
@@ -211,8 +212,33 @@ def main():
                     pass
                 was_paused = True
 
-            cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w))
-            cv2.waitKey(30)  # ~30Hz UI while paused
+            ui.show(disp)
+            # poll keys without blocking
+            key = ui.poll()
+            if key == ord('q'):
+                break
+            elif key == ord('m'):
+                appsettings.set_value("show_mask", not bool(cfg.get("show_mask", False)))
+            elif key == ord('a'):
+                editor.toggle(w0, h0)
+            elif key == ord('c'):
+                if cal.active:
+                    ppy = compute_px_per_yard()
+                    if ppy:
+                        appsettings.set_value("calibration.px_per_yard", float(ppy))
+                        log(f"Calibration saved (will apply next run): {ppy:.2f} px/yd")
+                    cal.toggle(w0, h0)
+                else:
+                    cal.toggle(w0, h0)
+            elif key == ord('b'):
+                if picker.active:
+                    picker.commit(frame)
+                    picker.toggle(w0, h0)
+                    log("Ball color saved (applies next run).")
+                else:
+                    picker.toggle(w0, h0)
+            # light sleep for UI
+            time.sleep(0.03)
             continue
         else:
             if was_paused:
@@ -311,8 +337,9 @@ def main():
                         if mph_exit is None or mph_exit >= min_mph:
                             log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
                             draw_status_dot(disp, 'red')
-                            cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w))
-                            cv2.waitKey(wait_ms)
+                            ui.show(disp)
+                            if is_video:
+                                time.sleep(wait_ms / 1000.0)
                             post_shot(mph_exit or 0.0, yps_exit or 0.0, hla or 0.0, cfg)
                         else:
                             log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
@@ -328,14 +355,14 @@ def main():
             roi_small = disp[0:mh, 0:mw]
             cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
 
-        preview = resize_keep_aspect(disp, target_w)
-        cv2.imshow("PuttTracker", preview)
+        # Push the frame to UI
+        ui.show(disp)
 
-        key = cv2.waitKey(wait_ms if is_video else 1) & 0xFF
+        # Non-blocking key polling
+        key = ui.poll()
         if key == ord('q'):
             break
         elif key == ord('m'):
-            # writes JSON, but this session keeps using startup cfg
             appsettings.set_value("show_mask", not bool(cfg.get("show_mask", False)))
         elif key == ord('a'):
             editor.toggle(w0, h0)
@@ -356,7 +383,15 @@ def main():
             else:
                 picker.toggle(w0, h0)
 
+        # Throttle sequential video playback so it doesn't race
+        if is_video:
+            time.sleep(wait_ms / 1000.0)
+
     editor.close(); cal.close(); picker.close()
+    try:
+        ui.stop()
+    except Exception:
+        pass
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
