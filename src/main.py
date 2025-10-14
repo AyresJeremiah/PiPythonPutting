@@ -2,11 +2,13 @@ import time
 import math
 import cv2
 import requests
+
 from tracking.ball_detector import BallDetector
 from tracking.motion_tracker import MotionTracker
 from camera.capture import Camera
 from utils.draw_utils import (
-    draw_ball, draw_vector, put_hud, draw_roi, banner, help_box, draw_calibration_line, draw_status_dot
+    draw_ball, draw_vector, put_hud, draw_roi, banner, help_box,
+    draw_calibration_line, draw_status_dot
 )
 from utils.logger import log
 import settings as appsettings
@@ -16,12 +18,14 @@ from ui.color_picker import ColorPicker
 
 COOLDOWN_SEC = 1.0  # delay after a shot before tracking again
 
+
 def resize_keep_aspect(frame, target_w):
     h, w = frame.shape[:2]
     if w == 0 or h == 0:
         return frame
     scale = target_w / float(w)
-    return cv2.resize(frame, (int(w*scale), int(h*scale)))
+    return cv2.resize(frame, (int(w * scale), int(h * scale)))
+
 
 def inside_roi(pt, roi):
     if pt is None or roi is None:
@@ -30,12 +34,14 @@ def inside_roi(pt, roi):
     x1, y1, x2, y2 = roi
     return x1 <= x <= x2 and y1 <= y <= y2
 
+
 def to_real_units(px_velocity, px_per_yard):
     if px_velocity is None or px_per_yard is None or px_per_yard <= 0:
         return None, None
     yds_per_s = px_velocity / px_per_yard
     mph = yds_per_s * (3600.0 / 1760.0)
     return yds_per_s, mph
+
 
 def post_shot(mph, yds_per_s, direction):
     """
@@ -80,6 +86,7 @@ def post_shot(mph, yds_per_s, direction):
         log(f"Request error posting shot -> {url}: {e}")
     return False, None
 
+
 def main():
     s = appsettings.load()
     show_mask = bool(s.get("show_mask", False))
@@ -98,7 +105,8 @@ def main():
 
     detector = BallDetector()
     tracker = MotionTracker()
-    # Use video FPS for timing when source=video, for correct speeds
+
+    # Use video FPS for timing when source=video, for correct speeds; also throttle UI.
     is_video = (inp.get("source") == "video")
     vid_fps = 30.0
     wait_ms = 1
@@ -110,7 +118,6 @@ def main():
             tracker.set_dt_override(1.0 / float(vid_fps))
         except Exception:
             pass
-        # throttle UI loop to video FPS
         try:
             wait_ms = max(1, int(round(1000.0 / float(vid_fps))))
         except Exception:
@@ -151,6 +158,9 @@ def main():
             yield f
 
     for frame in yield_with_first(first_frame, frame_iter):
+        # Work on a display copy; keep `frame` pristine for detection
+        disp = frame.copy()
+
         s = appsettings.load()
         show_mask = bool(s.get("show_mask", show_mask))
         target_w = int(s.get("target_width", target_w))
@@ -161,46 +171,52 @@ def main():
         paused = editor.active or cal.active or picker.active
         now = time.time()
 
+        # RUNNING / PAUSED tag
+        if paused:
+            banner(disp, "PAUSED")
+        else:
+            banner(disp, "RUNNING")
+
         if paused:
             tracker.reset()
             last_pos = None
             last_inside = False
-            draw_roi(frame, roi)
+            draw_roi(disp, roi)
 
             if editor.active:
-                banner(frame, "SLIDER EDIT MODE (processing paused)")
-                help_box(frame, [
+                banner(disp, "SLIDER EDIT MODE (processing paused)")
+                help_box(disp, [
                     "Adjust ROI & settings in 'PuttTracker Settings'",
                     "a: close sliders | c: calibration | b: color pick | q: quit"
                 ])
 
             if cal.active:
                 L = s["calibration"]["line"]
-                draw_calibration_line(frame, L)
+                draw_calibration_line(disp, L)
                 ppy = compute_px_per_yard()
                 txt = f"CALIBRATION: px/yd={ppy:.2f}" if ppy else "CALIBRATION: adjust line to yardstick"
-                banner(frame, txt)
-                help_box(frame, [
+                banner(disp, txt)
+                help_box(disp, [
                     "Align the YELLOW line with your yardstick",
                     "Use 'yards_len x10' if your stick != 1.0 yd",
                     "Press 'c' to close and save, then resume"
                 ])
 
             if picker.active:
-                picker.render_overlay(frame)
+                picker.render_overlay(disp)
 
-            draw_status_dot(frame, 'yellow')
+            draw_status_dot(disp, 'yellow')
 
         else:
             in_cooldown = (now - last_shot_time) < COOLDOWN_SEC
 
             if in_cooldown:
                 tracker.reset()
-                draw_roi(frame, roi)
-                banner(frame, "COOLDOWN...")
-                draw_status_dot(frame, 'yellow')
+                draw_roi(disp, roi)
+                banner(disp, "COOLDOWN...")
+                draw_status_dot(disp, 'yellow')
             else:
-                center, radius = detector.detect(frame)
+                center, radius = detector.detect(frame)  # detect on clean frame
                 in_area = inside_roi(center, roi)
 
                 velocity, direction = tracker.update(center if in_area else None)
@@ -217,10 +233,10 @@ def main():
                             log(f"SHOT: {mph_exit:.1f} mph ({yps_exit:.2f} yd/s) dir={last_valid_direction:.2f}° (exited ROI)")
                         else:
                             log(f"SHOT: vel={last_valid_velocity:.2f} px/s, dir={last_valid_direction:.2f}° (exited ROI)")
-                        # POST
+                        # POST (mark red while sending)
                         sending_now = True
-                        draw_status_dot(frame, 'red')
-                        cv2.imshow("PuttTracker", resize_keep_aspect(frame, target_w))
+                        draw_status_dot(disp, 'red')
+                        cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w))
                         cv2.waitKey(wait_ms)
                         _ = post_shot(
                             mph_exit if mph_exit is not None else 0.0,
@@ -234,12 +250,13 @@ def main():
                         last_shot_time = time.time()
                 last_inside = in_area
 
-                draw_ball(frame, center if in_area else None, radius if in_area and radius else 0.0)
-                draw_roi(frame, roi)
+                # Overlays
+                draw_ball(disp, center if in_area else None, radius if in_area and radius else 0.0)
+                draw_roi(disp, roi)
                 if in_area:
-                    draw_vector(frame, last_pos, center)
+                    draw_vector(disp, last_pos, center)
                 put_hud(
-                    frame,
+                    disp,
                     velocity if in_area else None,
                     direction if in_area else None,
                     tracker.fps,
@@ -250,19 +267,22 @@ def main():
                 if show_mask and detector.last_mask is not None:
                     mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
                     mh, mw = mask.shape[:2]
-                    roi_small = frame[0:mh, 0:mw]
+                    roi_small = disp[0:mh, 0:mw]
                     cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
 
+                # status: green if ball in view & inside ROI; yellow if not found
                 if center is None:
-                    draw_status_dot(frame, 'yellow')
+                    draw_status_dot(disp, 'yellow')
                 else:
-                    draw_status_dot(frame, 'green')
+                    draw_status_dot(disp, 'green')
 
                 last_pos = center if in_area else last_pos
 
-        preview = resize_keep_aspect(frame, target_w)
+        # Present
+        preview = resize_keep_aspect(disp, target_w)
         cv2.imshow("PuttTracker", preview)
 
+        # Input
         key = cv2.waitKey(wait_ms) & 0xFF
         if key == ord('q'):
             break
@@ -290,6 +310,7 @@ def main():
 
     editor.close(); cal.close(); picker.close()
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()

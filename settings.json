@@ -1,13 +1,13 @@
 {
   "ball_color": "white",
-  "min_ball_radius_px": 3,
+  "min_ball_radius_px": 1,
   "show_mask": false,
   "target_width": 960,
   "roi": {
-    "startx": 221,
-    "endx": 558,
-    "starty": 559,
-    "endy": 968
+    "startx": 333,
+    "endx": 693,
+    "starty": 522,
+    "endy": 924
   },
   "calibration": {
     "px_per_yard": 1103.6779141903696,
@@ -19,7 +19,7 @@
       "y2": 46
     }
   },
-  "min_report_mph": 0.05,
+  "min_report_mph": 0.00,
   "post": {
     "enabled": true,
     "host": "10.10.10.23",
@@ -29,19 +29,19 @@
   },
   "ball_hsv": {
     "lower": [
+      35,
       0,
-      0,
-      180
+      91
     ],
     "upper": [
-      180,
-      80,
-      255
+      59,
+      63,
+      231
     ]
   },
   "input": {
     "source": "video",
-    "video_path": "testdata/left_bright.mp4",
+    "video_path": "testdata/better.mp4",
     "loop": true
   }
 }
