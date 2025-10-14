@@ -23,6 +23,20 @@ def rect_contains(pt, rect):
     x,y = pt
     return rect["x1"] <= x <= rect["x2"] and rect["y1"] <= y <= rect["y2"]
 
+def rect_union(a, b):
+    return {
+        "x1": min(int(a["x1"]), int(b["x1"])),
+        "y1": min(int(a["y1"]), int(b["y1"])),
+        "x2": max(int(a["x2"]), int(b["x2"])),
+        "y2": max(int(a["y2"]), int(b["y2"]))
+    }
+
+def clamp_rect(rc, w, h):
+    rc["x1"] = max(0, min(int(rc["x1"]), w-1)); rc["x2"] = max(1, min(int(rc["x2"]), w))
+    rc["y1"] = max(0, min(int(rc["y1"]), h-1)); rc["y2"] = max(1, min(int(rc["y2"]), h))
+    if rc["x1"] >= rc["x2"]: rc["x2"] = min(w, rc["x1"]+1)
+    if rc["y1"] >= rc["y2"]: rc["y2"] = min(h, rc["y1"]+1)
+
 def to_real_units(px_velocity, px_per_yard):
     if px_velocity is None or not px_per_yard or px_per_yard <= 0: return None, None
     yps = px_velocity / px_per_yard
@@ -55,13 +69,18 @@ def post_shot(mph, yps, direction):
         return False, None
 
 def main():
-    # === Read settings ONCE (cached) ===
-    s = appsettings.load()  # returns cached dict thereafter (no disk IO each loop)
+    cv2.setNumThreads(1)
+
+    # === Read settings (cached) ===
+    s = appsettings.load()
     show_mask   = bool(s.get("show_mask", False))
     target_w    = int(s.get("target_width", 960))
     min_mph     = float(s.get("min_report_mph", 1.0))
     inp         = s.get("input", {})
     px_per_yd   = s["calibration"]["px_per_yard"]
+    detect_scale = float(s.get("detect", {}).get("scale", 0.75))
+    if detect_scale <= 0: detect_scale = 1.0
+    if detect_scale > 1.0: detect_scale = 1.0
 
     # Input source
     if inp.get("source","camera") == "video":
@@ -72,7 +91,7 @@ def main():
     detector = BallDetector()
     tracker  = MotionTracker()
 
-    # Video timing (UI throttle) — physics dt can stay true to file FPS
+    # Video timing (UI throttle)
     is_video = (inp.get("source") == "video")
     wait_ms = 1
     if is_video:
@@ -119,8 +138,11 @@ def main():
     frozen_frame = first_frame.copy()
     was_paused = False
 
+    # Cached paused composite
+    paused_cache = None
+    paused_cache_valid = False
+
     while True:
-        # use cached settings; they update in-memory when sliders call set_value(...)
         s = appsettings.load()
         show_mask   = bool(s.get("show_mask", show_mask))
         target_w    = int(s.get("target_width", target_w))
@@ -128,17 +150,51 @@ def main():
         stage       = s["zones"]["stage_roi"]
         track       = s["zones"]["track_roi"]
         px_per_yd   = s["calibration"]["px_per_yard"]
+        detect_scale = float(s.get("detect", {}).get("scale", detect_scale))
+        if detect_scale <= 0: detect_scale = 1.0
+        if detect_scale > 1.0: detect_scale = 1.0
 
         paused = editor.active or cal.active or picker.active
 
         # ----- Freeze view & stop advancing when paused -----
         if paused:
+            # Keep the same background frame, but redraw overlays EVERY loop from current settings
             frame = frozen_frame.copy()
+
+            disp = frame.copy()
+            # read current (already-cached) settings each loop
+            s = appsettings.load()
+            stage = s["zones"]["stage_roi"]
+            track = s["zones"]["track_roi"]
+
+            # overlays that should reflect slider changes immediately
+            draw_zone(disp, stage, "STAGE", (0, 200, 255))
+            draw_zone(disp, track, "TRACK", (0, 180, 0))
+            banner(disp, "PAUSED")
+            draw_status_dot(disp, 'yellow')
+
+            if editor.active:
+                help_box(disp, ["Adjust STAGE & TRACK rectangles", "Close 'a' to resume"])
+            if cal.active:
+                from utils.draw_utils import draw_calibration_line
+                draw_calibration_line(disp, s["calibration"]["line"])
+            if picker.active:
+                picker.render_overlay(disp)
+
+            # stop advancing capture
             if not was_paused:
-                try: camera.pause()
-                except Exception: pass
-            was_paused = True
+                try:
+                    camera.pause()
+                except Exception:
+                    pass
+                was_paused = True
+
+            cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w))
+            cv2.waitKey(30)  # ~33ms ~ 30Hz UI while paused
+            continue
+
         else:
+            paused_cache_valid = False
             if was_paused:
                 try: camera.resume()
                 except Exception: pass
@@ -152,77 +208,89 @@ def main():
         disp = frame.copy()
 
         # Draw zones
-        from utils.draw_utils import draw_zone
         draw_zone(disp, stage, "STAGE", (0,200,255))
         draw_zone(disp, track, "TRACK", (0,180,0))
 
-        if paused:
-            state = "IDLE" if state != "COOLDOWN" else state
-            tracker.reset(); last_pos=None; lost_frames=0
-            banner(disp, "PAUSED"); draw_status_dot(disp, 'yellow')
-            if editor.active:
-                help_box(disp, ["Adjust STAGE & TRACK rectangles", "Close 'a' to resume"])
-            if cal.active:
-                from utils.draw_utils import draw_calibration_line
-                L = s["calibration"]["line"]; draw_calibration_line(disp, L)
-                ppy = compute_px_per_yard()
-                banner(disp, f"CALIBRATION: {ppy:.2f} px/yd" if ppy else "CALIBRATE LINE TO YARDSTICK")
-            if picker.active:
-                picker.render_overlay(disp)
+        now = time.time()
+        if state == "COOLDOWN":
+            if (now - last_shot_time) >= COOLDOWN_SEC:
+                state = "IDLE"
+            banner(disp, "COOLDOWN…"); draw_status_dot(disp, 'yellow')
 
         else:
-            now = time.time()
-            if state == "COOLDOWN":
-                if (now - last_shot_time) >= COOLDOWN_SEC:
-                    state = "IDLE"
-                banner(disp, "COOLDOWN…"); draw_status_dot(disp, 'yellow')
+            # ======== FAST DETECTION: union(Stage, Track) + downscale ========
+            union = rect_union(stage, track)
+            clamp_rect(union, w0, h0)
+
+            x1,y1,x2,y2 = union["x1"], union["y1"], union["x2"], union["y2"]
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0:
+                center, radius = None, None
             else:
-                # DETECT on raw frame
-                center, radius = detector.detect(frame)
-                if center is None:
-                    lost_frames = min(999, lost_frames+1)
-                else:
-                    lost_frames = 0
-
-                if state == "IDLE":
-                    banner(disp, "IDLE"); draw_status_dot(disp, 'yellow')
-                    if rect_contains(center, stage):
-                        tracker.reset(); last_pos = center; state = "STAGED"; log("Ball staged (armed).")
-
-                elif state == "STAGED":
-                    banner(disp, "STAGED → enter TRACK to start"); draw_status_dot(disp, 'green' if rect_contains(center, stage) else 'yellow')
-                    if rect_contains(center, track):
-                        tracker.reset(); last_pos = center; state = "TRACKING"; log("Tracking started.")
-
-                elif state == "TRACKING":
-                    banner(disp, "TRACKING")
-                    if rect_contains(center, track) and center is not None:
-                        velocity, _ = tracker.update(center)
-                        if velocity is not None:
-                            last_valid_velocity = velocity
-                        yps, mph = to_real_units(velocity, px_per_yd)
-                        draw_ball(disp, center, radius or 0)
-                        if last_pos is not None: draw_vector(disp, last_pos, center)
-                        put_hud(disp, velocity, None, tracker.fps, mph, yps)
-                        draw_status_dot(disp, 'green')
-                        last_pos = center
+                if detect_scale < 1.0:
+                    small = cv2.resize(crop, None, fx=detect_scale, fy=detect_scale, interpolation=cv2.INTER_AREA)
+                    center_s, radius_s = detector.detect(small)
+                    if center_s is not None:
+                        cx = center_s[0] / detect_scale
+                        cy = center_s[1] / detect_scale
+                        center = (cx + x1, cy + y1)
+                        radius = (radius_s or 0.0) / detect_scale
                     else:
-                        # finalize on exit or if lost too long
-                        finalize = True
-                        if center is None and lost_frames < LOST_FRAMES_LIMIT:
-                            finalize = False
-                        if finalize:
-                            yps_exit, mph_exit = to_real_units(last_valid_velocity, px_per_yd)
-                            hla = compute_hla(last_pos, center if center is not None else last_pos)
-                            if mph_exit is None or mph_exit >= min_mph:
-                                log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
-                                draw_status_dot(disp, 'red'); cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w)); cv2.waitKey(wait_ms)
-                                post_shot(mph_exit or 0.0, yps_exit or 0.0, hla or 0.0)
-                            else:
-                                log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
-                            state = "COOLDOWN"; last_shot_time = time.time(); tracker.reset(); lost_frames=0
+                        center, radius = None, None
+                else:
+                    center_c, radius_c = detector.detect(crop)
+                    if center_c is not None:
+                        center = (center_c[0] + x1, center_c[1] + y1)
+                        radius = radius_c
+                    else:
+                        center, radius = None, None
+            # ================================================================
 
-        if show_mask and getattr(detector, "last_mask", None) is not None:
+            if center is None:
+                lost_frames = min(999, lost_frames+1)
+            else:
+                lost_frames = 0
+
+            if state == "IDLE":
+                banner(disp, "IDLE"); draw_status_dot(disp, 'yellow')
+                if rect_contains(center, stage):
+                    tracker.reset(); last_pos = center; state = "STAGED"; log("Ball staged (armed).")
+
+            elif state == "STAGED":
+                banner(disp, "STAGED → enter TRACK to start"); draw_status_dot(disp, 'green' if rect_contains(center, stage) else 'yellow')
+                if rect_contains(center, track):
+                    tracker.reset(); last_pos = center; state = "TRACKING"; log("Tracking started.")
+
+            elif state == "TRACKING":
+                banner(disp, "TRACKING")
+                if rect_contains(center, track) and center is not None:
+                    velocity, _ = tracker.update(center)
+                    if velocity is not None:
+                        last_valid_velocity = velocity
+                    yps, mph = to_real_units(velocity, px_per_yd)
+                    draw_ball(disp, center, radius or 0)
+                    if last_pos is not None: draw_vector(disp, last_pos, center)
+                    put_hud(disp, velocity, None, tracker.fps, mph, yps)
+                    draw_status_dot(disp, 'green')
+                    last_pos = center
+                else:
+                    finalize = True
+                    if center is None and lost_frames < LOST_FRAMES_LIMIT:
+                        finalize = False
+                    if finalize:
+                        yps_exit, mph_exit = to_real_units(last_valid_velocity, px_per_yd)
+                        hla = compute_hla(last_pos, center if center is not None else last_pos)
+                        if mph_exit is None or mph_exit >= min_mph:
+                            log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
+                            draw_status_dot(disp, 'red'); cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w)); cv2.waitKey(wait_ms)
+                            post_shot(mph_exit or 0.0, yps_exit or 0.0, hla or 0.0)
+                        else:
+                            log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
+                        state = "COOLDOWN"; last_shot_time = time.time(); tracker.reset(); lost_frames=0
+
+        # Optional mask overlay (debug)
+        s = appsettings.load()
+        if s.get("show_mask", False) and getattr(detector, "last_mask", None) is not None:
             mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
             mh, mw = mask.shape[:2]; roi_small = disp[0:mh, 0:mw]
             cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
@@ -230,9 +298,10 @@ def main():
         preview = resize_keep_aspect(disp, target_w)
         cv2.imshow("PuttTracker", preview)
 
-        key = cv2.waitKey(1 if not is_video else wait_ms) & 0xFF
+        key = cv2.waitKey(wait_ms if is_video else 1) & 0xFF
         if key == ord('q'): break
-        elif key == ord('m'): appsettings.set_value("show_mask", not bool(s.get("show_mask", False)))
+        elif key == ord('m'):
+            appsettings.set_value("show_mask", not bool(s.get("show_mask", False)))
         elif key == ord('a'): editor.toggle(w0, h0)
         elif key == ord('c'):
             if cal.active:
