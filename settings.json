@@ -1,6 +1,6 @@
 {
   "ball_color": "white",
-  "min_ball_radius_px": 1,
+  "min_ball_radius_px": 10,
   "show_mask": false,
   "target_width": 960,
   "roi": {
@@ -19,7 +19,7 @@
       "y2": 46
     }
   },
-  "min_report_mph": 0.00,
+  "min_report_mph": 0.02,
   "post": {
     "enabled": true,
     "host": "10.10.10.23",
