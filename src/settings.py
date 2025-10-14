@@ -10,7 +10,12 @@ _DEFAULTS: Dict[str, Any] = {
     "show_mask": False,
     "target_width": 960,
     "min_report_mph": 1.0,
-    "roi": {"startx": None, "endx": None, "starty": None, "endy": None},
+    "roi": {"startx": None, "endx": None, "starty": None, "endy": None},  # legacy (kept)
+    "zones": {
+        # NEW: two-zone trigger
+        "stage_roi": {"x1": None, "y1": None, "x2": None, "y2": None},
+        "track_roi": {"x1": None, "y1": None, "x2": None, "y2": None}
+    },
     "calibration": {
         "px_per_yard": None,
         "yards_length": 1.0,
@@ -24,14 +29,13 @@ _DEFAULTS: Dict[str, Any] = {
         "timeout_sec": 2.5
     },
     "input": {
-        "source": "camera",               # or "video"
+        "source": "camera",
         "video_path": "testdata/my_putt.mp4",
         "loop": True
     },
-    # NEW: Gate (cross) line that must be crossed to arm a shot
-    "gate": {
-        "enabled": True,
-        "line": {"x1": 100, "y1": 200, "x2": 500, "y2": 200}
+    "gate": {  # kept for compatibility but unused now
+        "enabled": False,
+        "line": {"x1": 0, "y1": 0, "x2": 0, "y2": 0}
     }
 }
 
@@ -67,7 +71,7 @@ def save():
         json.dump(_cache, f, indent=2)
 
 def set_value(path, value):
-    """path like 'show_mask', 'roi.startx', 'ball_hsv.lower', 'post.host', 'gate.enabled'."""
+    """path like 'zones.stage_roi.x1', 'show_mask', 'min_report_mph'."""
     s = load()
     parts = path.split(".")
     ref = s
@@ -76,65 +80,49 @@ def set_value(path, value):
     ref[parts[-1]] = value
     save()
 
-def set_roi(x1, y1, x2, y2):
-    s = load()
-    s["roi"]["startx"] = int(min(x1, x2))
-    s["roi"]["endx"]   = int(max(x1, x2))
-    s["roi"]["starty"] = int(min(y1, y2))
-    s["roi"]["endy"]   = int(max(y1, y2))
-    save()
-
 def ensure_roi_initialized(width: int, height: int):
     s = load()
-    roi = s["roi"]
-    if None in (roi["startx"], roi["endx"], roi["starty"], roi["endy"]):
-        roi["startx"] = 0
-        roi["starty"] = 0
-        roi["endx"]   = int(width)
-        roi["endy"]   = int(height)
+    r = s["roi"]
+    if None in (r["startx"], r["endx"], r["starty"], r["endy"]):
+        r["startx"], r["starty"], r["endx"], r["endy"] = 0, 0, width, height
         save()
 
 def clamp_roi(width: int, height: int):
     s = load()
     r = s["roi"]
     r["startx"] = max(0, min(int(r["startx"]), width-1))
-    r["endx"]   = max(1, min(int(r["endx"]), width))
+    r["endx"]   = max(1, min(int(r["endx"]),   width))
     r["starty"] = max(0, min(int(r["starty"]), height-1))
-    r["endy"]   = max(1, min(int(r["endy"]), height))
-    if r["startx"] >= r["endx"]:
-        r["endx"] = min(width, r["startx"] + 1)
-    if r["starty"] >= r["endy"]:
-        r["endy"] = min(height, r["starty"] + 1)
+    r["endy"]   = max(1, min(int(r["endy"]),   height))
+    if r["startx"] >= r["endx"]:  r["endx"]  = min(width,  r["startx"] + 1)
+    if r["starty"] >= r["endy"]:  r["endy"]  = min(height, r["starty"] + 1)
     save()
 
-def clamp_calibration(width:int, height:int):
+# NEW: init/clamp for zones
+def ensure_zones_initialized(width:int, height:int):
     s = load()
-    L = s["calibration"]["line"]
-    for k in ("x1","x2"):
-        L[k] = max(0, min(int(L[k]), width-1))
-    for k in ("y1","y2"):
-        L[k] = max(0, min(int(L[k]), height-1))
-    yl = float(s["calibration"].get("yards_length", 1.0))
-    if yl <= 0: s["calibration"]["yards_length"] = 1.0
+    z = s["zones"]
+    st = z["stage_roi"]; tr = z["track_roi"]
+    if None in (st["x1"], st["y1"], st["x2"], st["y2"]):
+        # default small box near bottom-left
+        st["x1"], st["y1"] = int(width*0.10), int(height*0.70)
+        st["x2"], st["y2"] = int(width*0.30), int(height*0.95)
+    if None in (tr["x1"], tr["y1"], tr["x2"], tr["y2"]):
+        # default tracking lane across the mat
+        tr["x1"], tr["y1"] = int(width*0.15), int(height*0.25)
+        tr["x2"], tr["y2"] = int(width*0.85), int(height*0.75)
     save()
 
-# NEW: gate helpers
-def ensure_gate_initialized(width:int, height:int):
-    s = load()
-    g = s.get("gate", {})
-    L = g.get("line", {})
-    if not L or any(k not in L or L[k] is None for k in ("x1","y1","x2","y2")):
-        y = height // 2
-        s["gate"] = s.get("gate", {})
-        s["gate"]["enabled"] = True
-        s["gate"]["line"] = {"x1": 0, "y1": y, "x2": width-1, "y2": y}
-        save()
+def clamp_zone_rect(rect, width:int, height:int):
+    rect["x1"] = max(0, min(int(rect["x1"]), width-1))
+    rect["x2"] = max(1, min(int(rect["x2"]), width))
+    rect["y1"] = max(0, min(int(rect["y1"]), height-1))
+    rect["y2"] = max(1, min(int(rect["y2"]), height))
+    if rect["x1"] >= rect["x2"]: rect["x2"] = min(width, rect["x1"]+1)
+    if rect["y1"] >= rect["y2"]: rect["y2"] = min(height, rect["y1"]+1)
 
-def clamp_gate(width:int, height:int):
+def clamp_zones(width:int, height:int):
     s = load()
-    L = s["gate"]["line"]
-    L["x1"] = max(0, min(int(L["x1"]), width-1))
-    L["x2"] = max(0, min(int(L["x2"]), width-1))
-    L["y1"] = max(0, min(int(L["y1"]), height-1))
-    L["y2"] = max(0, min(int(L["y2"]), height-1))
+    clamp_zone_rect(s["zones"]["stage_roi"], width, height)
+    clamp_zone_rect(s["zones"]["track_roi"], width, height)
     save()

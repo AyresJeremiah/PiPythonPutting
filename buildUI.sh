@@ -1,17 +1,10 @@
 #!/bin/bash
 set -e
 
-# --- sanity ---
-[ -d "src" ] || { echo "❌ Run from your project root (where ./src exists)."; exit 1; }
-mkdir -p src/utils src/ui src/tracking src/camera
-
-echo "==> Backing up key files…"
-for f in src/settings.py src/utils/draw_utils.py src/main.py; do
-  [ -f "$f" ] && cp "$f" "$f.bak.gate"
-done
+[ -d "src" ] || { echo "❌ Run from project root (where ./src exists)"; exit 1; }
 
 ###############################################################################
-# 1) settings.py — keep previous defaults, add gate block + helpers
+# settings.py — add zones {stage_roi, track_roi}
 ###############################################################################
 cat > src/settings.py << 'EOF'
 import json, os
@@ -26,7 +19,12 @@ _DEFAULTS: Dict[str, Any] = {
     "show_mask": False,
     "target_width": 960,
     "min_report_mph": 1.0,
-    "roi": {"startx": None, "endx": None, "starty": None, "endy": None},
+    "roi": {"startx": None, "endx": None, "starty": None, "endy": None},  # legacy (kept)
+    "zones": {
+        # NEW: two-zone trigger
+        "stage_roi": {"x1": None, "y1": None, "x2": None, "y2": None},
+        "track_roi": {"x1": None, "y1": None, "x2": None, "y2": None}
+    },
     "calibration": {
         "px_per_yard": None,
         "yards_length": 1.0,
@@ -40,14 +38,13 @@ _DEFAULTS: Dict[str, Any] = {
         "timeout_sec": 2.5
     },
     "input": {
-        "source": "camera",               # or "video"
+        "source": "camera",
         "video_path": "testdata/my_putt.mp4",
         "loop": True
     },
-    # NEW: Gate (cross) line that must be crossed to arm a shot
-    "gate": {
-        "enabled": True,
-        "line": {"x1": 100, "y1": 200, "x2": 500, "y2": 200}
+    "gate": {  # kept for compatibility but unused now
+        "enabled": False,
+        "line": {"x1": 0, "y1": 0, "x2": 0, "y2": 0}
     }
 }
 
@@ -83,7 +80,7 @@ def save():
         json.dump(_cache, f, indent=2)
 
 def set_value(path, value):
-    """path like 'show_mask', 'roi.startx', 'ball_hsv.lower', 'post.host', 'gate.enabled'."""
+    """path like 'zones.stage_roi.x1', 'show_mask', 'min_report_mph'."""
     s = load()
     parts = path.split(".")
     ref = s
@@ -92,72 +89,56 @@ def set_value(path, value):
     ref[parts[-1]] = value
     save()
 
-def set_roi(x1, y1, x2, y2):
-    s = load()
-    s["roi"]["startx"] = int(min(x1, x2))
-    s["roi"]["endx"]   = int(max(x1, x2))
-    s["roi"]["starty"] = int(min(y1, y2))
-    s["roi"]["endy"]   = int(max(y1, y2))
-    save()
-
 def ensure_roi_initialized(width: int, height: int):
     s = load()
-    roi = s["roi"]
-    if None in (roi["startx"], roi["endx"], roi["starty"], roi["endy"]):
-        roi["startx"] = 0
-        roi["starty"] = 0
-        roi["endx"]   = int(width)
-        roi["endy"]   = int(height)
+    r = s["roi"]
+    if None in (r["startx"], r["endx"], r["starty"], r["endy"]):
+        r["startx"], r["starty"], r["endx"], r["endy"] = 0, 0, width, height
         save()
 
 def clamp_roi(width: int, height: int):
     s = load()
     r = s["roi"]
     r["startx"] = max(0, min(int(r["startx"]), width-1))
-    r["endx"]   = max(1, min(int(r["endx"]), width))
+    r["endx"]   = max(1, min(int(r["endx"]),   width))
     r["starty"] = max(0, min(int(r["starty"]), height-1))
-    r["endy"]   = max(1, min(int(r["endy"]), height))
-    if r["startx"] >= r["endx"]:
-        r["endx"] = min(width, r["startx"] + 1)
-    if r["starty"] >= r["endy"]:
-        r["endy"] = min(height, r["starty"] + 1)
+    r["endy"]   = max(1, min(int(r["endy"]),   height))
+    if r["startx"] >= r["endx"]:  r["endx"]  = min(width,  r["startx"] + 1)
+    if r["starty"] >= r["endy"]:  r["endy"]  = min(height, r["starty"] + 1)
     save()
 
-def clamp_calibration(width:int, height:int):
+# NEW: init/clamp for zones
+def ensure_zones_initialized(width:int, height:int):
     s = load()
-    L = s["calibration"]["line"]
-    for k in ("x1","x2"):
-        L[k] = max(0, min(int(L[k]), width-1))
-    for k in ("y1","y2"):
-        L[k] = max(0, min(int(L[k]), height-1))
-    yl = float(s["calibration"].get("yards_length", 1.0))
-    if yl <= 0: s["calibration"]["yards_length"] = 1.0
+    z = s["zones"]
+    st = z["stage_roi"]; tr = z["track_roi"]
+    if None in (st["x1"], st["y1"], st["x2"], st["y2"]):
+        # default small box near bottom-left
+        st["x1"], st["y1"] = int(width*0.10), int(height*0.70)
+        st["x2"], st["y2"] = int(width*0.30), int(height*0.95)
+    if None in (tr["x1"], tr["y1"], tr["x2"], tr["y2"]):
+        # default tracking lane across the mat
+        tr["x1"], tr["y1"] = int(width*0.15), int(height*0.25)
+        tr["x2"], tr["y2"] = int(width*0.85), int(height*0.75)
     save()
 
-# NEW: gate helpers
-def ensure_gate_initialized(width:int, height:int):
-    s = load()
-    g = s.get("gate", {})
-    L = g.get("line", {})
-    if not L or any(k not in L or L[k] is None for k in ("x1","y1","x2","y2")):
-        y = height // 2
-        s["gate"] = s.get("gate", {})
-        s["gate"]["enabled"] = True
-        s["gate"]["line"] = {"x1": 0, "y1": y, "x2": width-1, "y2": y}
-        save()
+def clamp_zone_rect(rect, width:int, height:int):
+    rect["x1"] = max(0, min(int(rect["x1"]), width-1))
+    rect["x2"] = max(1, min(int(rect["x2"]), width))
+    rect["y1"] = max(0, min(int(rect["y1"]), height-1))
+    rect["y2"] = max(1, min(int(rect["y2"]), height))
+    if rect["x1"] >= rect["x2"]: rect["x2"] = min(width, rect["x1"]+1)
+    if rect["y1"] >= rect["y2"]: rect["y2"] = min(height, rect["y1"]+1)
 
-def clamp_gate(width:int, height:int):
+def clamp_zones(width:int, height:int):
     s = load()
-    L = s["gate"]["line"]
-    L["x1"] = max(0, min(int(L["x1"]), width-1))
-    L["x2"] = max(0, min(int(L["x2"]), width-1))
-    L["y1"] = max(0, min(int(L["y1"]), height-1))
-    L["y2"] = max(0, min(int(L["y2"]), height-1))
+    clamp_zone_rect(s["zones"]["stage_roi"], width, height)
+    clamp_zone_rect(s["zones"]["track_roi"], width, height)
     save()
 EOF
 
 ###############################################################################
-# 2) draw_utils.py — add draw_gate_line (keeps existing helpers)
+# draw_utils.py — add zone drawers with labels
 ###############################################################################
 cat > src/utils/draw_utils.py << 'EOF'
 import cv2
@@ -165,32 +146,26 @@ import cv2
 def draw_ball(frame, center, radius):
     if center is None:
         return
-    (x, y) = center
-    cv2.circle(frame, (int(x), int(y)), int(max(2, radius)), (0, 255, 0), 2)
-    cv2.circle(frame, (int(x), int(y)), 3, (0, 0, 255), -1)
+    x, y = map(int, center)
+    cv2.circle(frame, (x, y), int(max(2, radius)), (0, 255, 0), 2)
+    cv2.circle(frame, (x, y), 3, (0, 0, 255), -1)
 
 def draw_vector(frame, p1, p2):
     if p1 is None or p2 is None:
         return
-    (x1, y1) = map(int, p1)
-    (x2, y2) = map(int, p2)
+    (x1, y1) = map(int, p1); (x2, y2) = map(int, p2)
     cv2.arrowedLine(frame, (x1, y1), (x2, y2), (255, 0, 0), 2, tipLength=0.25)
 
 def put_hud(frame, velocity=None, direction=None, fps=None, mph=None, yds=None):
     parts = []
-    if velocity is not None:
-        parts.append(f"vel: {velocity:.1f} px/s")
-    if yds is not None:
-        parts.append(f"{yds:.2f} yd/s")
-    if mph is not None:
-        parts.append(f"{mph:.1f} mph")
-    if direction is not None:
-        parts.append(f"dir: {direction:.1f}°")
-    if fps is not None:
-        parts.append(f"fps: {fps:.1f}")
-    text = " | ".join(parts) if parts else ""
-    if text:
-        cv2.rectangle(frame, (8, 6), (8 + 12*len(text), 36), (0, 0, 0), -1)
+    if velocity is not None: parts.append(f"vel: {velocity:.1f} px/s")
+    if yds is not None:      parts.append(f"{yds:.2f} yd/s")
+    if mph is not None:      parts.append(f"{mph:.1f} mph")
+    if direction is not None:parts.append(f"dir: {direction:.1f}°")
+    if fps is not None:      parts.append(f"fps: {fps:.1f}")
+    if parts:
+        text = " | ".join(parts)
+        cv2.rectangle(frame, (8, 6), (8 + 12*len(text), 36), (0,0,0), -1)
         cv2.putText(frame, text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1, cv2.LINE_AA)
 
 def draw_roi(frame, roi, color=(0, 200, 255), thickness=2):
@@ -198,15 +173,13 @@ def draw_roi(frame, roi, color=(0, 200, 255), thickness=2):
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
 def banner(frame, text, color=(0,0,255)):
-    h = 32
-    w = 10 + len(text) * 12
+    h = 32; w = 10 + len(text) * 12
     cv2.rectangle(frame, (8, 40), (8 + w, 40 + h), (0,0,0), -1)
     cv2.putText(frame, text, (16, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2, cv2.LINE_AA)
 
 def help_box(frame, lines):
     width = max([len(s) for s in lines]) if lines else 0
-    w = 20 + width * 8
-    h = 24 + len(lines) * 18
+    w = 20 + width * 8; h = 24 + len(lines) * 18
     cv2.rectangle(frame, (8, 80), (8 + w, 80 + h), (0,0,0), -1)
     y = 100
     for s in lines:
@@ -216,10 +189,9 @@ def help_box(frame, lines):
 def draw_calibration_line(frame, line, color=(0,255,255)):
     x1,y1,x2,y2 = map(int, (line["x1"], line["y1"], line["x2"], line["y2"]))
     cv2.line(frame, (x1,y1), (x2,y2), color, 2)
-    cv2.circle(frame, (x1,y1), 4, (0,0,0), -1)
-    cv2.circle(frame, (x2,y2), 4, (0,0,0), -1)
-    cv2.circle(frame, (x1,y1), 3, color, -1)
-    cv2.circle(frame, (x2,y2), 3, color, -1)
+    for (x,y) in ((x1,y1),(x2,y2)):
+        cv2.circle(frame, (x,y), 4, (0,0,0), -1)
+        cv2.circle(frame, (x,y), 3, color, -1)
 
 def draw_status_dot(frame, status: str):
     h, w = frame.shape[:2]
@@ -228,19 +200,109 @@ def draw_status_dot(frame, status: str):
     cv2.circle(frame, center, 8, (0,0,0), -1)
     cv2.circle(frame, center, 7, color, -1)
 
-# NEW: gate line
-def draw_gate_line(frame, line, enabled=True):
-    color = (0, 200, 0) if enabled else (160, 160, 160)
-    x1,y1,x2,y2 = map(int, (line["x1"], line["y1"], line["x2"], line["y2"]))
-    cv2.line(frame, (x1,y1), (x2,y2), color, 2)
-    cv2.circle(frame, (x1,y1), 4, (0,0,0), -1)
-    cv2.circle(frame, (x2,y2), 4, (0,0,0), -1)
-    cv2.circle(frame, (x1,y1), 3, color, -1)
-    cv2.circle(frame, (x2,y2), 3, color, -1)
+# NEW: zone drawers
+def draw_zone(frame, rect, label, color, thickness=2):
+    x1,y1,x2,y2 = map(int, (rect["x1"], rect["y1"], rect["x2"], rect["y2"]))
+    cv2.rectangle(frame, (x1,y1), (x2,y2), color, thickness)
+    cv2.putText(frame, label, (x1+6, y1+22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
 EOF
 
 ###############################################################################
-# 3) main.py — wire up gate cross arming + new HLA convention
+# slider_editor.py — add Stage/Track ROI sliders (load current values)
+###############################################################################
+cat > src/ui/slider_editor.py << 'EOF'
+import cv2
+import settings as appsettings
+
+class SliderEditor:
+    """Processing pauses while this window is open."""
+    def __init__(self, window_name: str = "PuttTracker Settings"):
+        self.win = window_name
+        self.active = False
+        self._w = None
+        self._h = None
+
+    def _set(self, path, value): appsettings.set_value(path, value)
+    def _clamp(self, v, lo, hi): return max(lo, min(int(v), hi))
+
+    # Stage ROI callbacks
+    def _cb_st_x1(self, v): self._set("zones.stage_roi.x1", self._clamp(v,0,self._w-1))
+    def _cb_st_y1(self, v): self._set("zones.stage_roi.y1", self._clamp(v,0,self._h-1))
+    def _cb_st_x2(self, v): self._set("zones.stage_roi.x2", self._clamp(v,1,self._w))
+    def _cb_st_y2(self, v): self._set("zones.stage_roi.y2", self._clamp(v,1,self._h))
+
+    # Track ROI callbacks
+    def _cb_tr_x1(self, v): self._set("zones.track_roi.x1", self._clamp(v,0,self._w-1))
+    def _cb_tr_y1(self, v): self._set("zones.track_roi.y1", self._clamp(v,0,self._h-1))
+    def _cb_tr_x2(self, v): self._set("zones.track_roi.x2", self._clamp(v,1,self._w))
+    def _cb_tr_y2(self, v): self._set("zones.track_roi.y2", self._clamp(v,1,self._h))
+
+    def _cb_min_rad(self, v): self._set("min_ball_radius_px", self._clamp(v,1,200))
+    def _cb_show_mask(self, v): self._set("show_mask", bool(v))
+    def _cb_min_mph(self, v): self._set("min_report_mph", float(v)/100.0)
+    def _cb_target_w(self, v):
+        v = int(v);  v = 320 if v < 320 else v
+        self._set("target_width", v)
+
+    def open(self, frame_width: int, frame_height: int):
+        self._w, self._h = int(frame_width), int(frame_height)
+        s = appsettings.load()
+
+        cv2.namedWindow(self.win, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.win, 460, 600)
+
+        # Stage ROI
+        cv2.createTrackbar("stage_x1", self.win, 0, max(1,self._w-1), lambda v: self._cb_st_x1(v))
+        cv2.createTrackbar("stage_y1", self.win, 0, max(1,self._h-1), lambda v: self._cb_st_y1(v))
+        cv2.createTrackbar("stage_x2", self.win, 1, max(1,self._w),   lambda v: self._cb_st_x2(v))
+        cv2.createTrackbar("stage_y2", self.win, 1, max(1,self._h),   lambda v: self._cb_st_y2(v))
+
+        # Track ROI
+        cv2.createTrackbar("track_x1", self.win, 0, max(1,self._w-1), lambda v: self._cb_tr_x1(v))
+        cv2.createTrackbar("track_y1", self.win, 0, max(1,self._h-1), lambda v: self._cb_tr_y1(v))
+        cv2.createTrackbar("track_x2", self.win, 1, max(1,self._w),   lambda v: self._cb_tr_x2(v))
+        cv2.createTrackbar("track_y2", self.win, 1, max(1,self._h),   lambda v: self._cb_tr_y2(v))
+
+        # Other
+        cv2.createTrackbar("min_ball_radius_px",   self.win, 1, 200,  lambda v: self._cb_min_rad(v))
+        cv2.createTrackbar("min_report_mph_x100",  self.win, 0, 3000, lambda v: self._cb_min_mph(v))
+        cv2.createTrackbar("target_width_px",      self.win, 320, 3840,lambda v: self._cb_target_w(v))
+        cv2.createTrackbar("show_mask",            self.win, 0, 1,     lambda v: self._cb_show_mask(v))
+
+        self._sync_from_settings(s)
+        self.active = True
+
+    def _sync_from_settings(self, s):
+        st = s["zones"]["stage_roi"]; tr = s["zones"]["track_roi"]
+        try:
+            cv2.setTrackbarPos("stage_x1", self.win, int(st["x1"]))
+            cv2.setTrackbarPos("stage_y1", self.win, int(st["y1"]))
+            cv2.setTrackbarPos("stage_x2", self.win, int(st["x2"]))
+            cv2.setTrackbarPos("stage_y2", self.win, int(st["y2"]))
+            cv2.setTrackbarPos("track_x1", self.win, int(tr["x1"]))
+            cv2.setTrackbarPos("track_y1", self.win, int(tr["y1"]))
+            cv2.setTrackbarPos("track_x2", self.win, int(tr["x2"]))
+            cv2.setTrackbarPos("track_y2", self.win, int(tr["y2"]))
+            cv2.setTrackbarPos("min_ball_radius_px", self.win, int(s.get("min_ball_radius_px",3)))
+            cv2.setTrackbarPos("min_report_mph_x100", self.win, int(round(float(s.get("min_report_mph",1.0))*100)))
+            tw = max(320, int(s.get("target_width",960)))
+            cv2.setTrackbarPos("target_width_px", self.win, tw)
+            cv2.setTrackbarPos("show_mask", self.win, 1 if s.get("show_mask", False) else 0)
+        except Exception:
+            pass
+
+    def close(self):
+        self.active = False
+        try: cv2.destroyWindow(self.win)
+        except Exception: pass
+
+    def toggle(self, frame_width: int, frame_height: int):
+        if self.active: self.close()
+        else: self.open(frame_width, frame_height)
+EOF
+
+###############################################################################
+# main.py — state machine: IDLE → STAGED → TRACKING → REPORT/COOLDOWN
 ###############################################################################
 cat > src/main.py << 'EOF'
 import time
@@ -252,8 +314,7 @@ from tracking.ball_detector import BallDetector
 from tracking.motion_tracker import MotionTracker
 from camera.capture import Camera
 from utils.draw_utils import (
-    draw_ball, draw_vector, put_hud, draw_roi, banner, help_box,
-    draw_calibration_line, draw_status_dot, draw_gate_line
+    draw_ball, draw_vector, put_hud, banner, help_box, draw_status_dot, draw_zone
 )
 from utils.logger import log
 import settings as appsettings
@@ -261,340 +322,255 @@ from ui.slider_editor import SliderEditor
 from ui.calibration_editor import CalibrationEditor, compute_px_per_yard
 from ui.color_picker import ColorPicker
 
-COOLDOWN_SEC = 1.0  # delay after a shot before tracking again
+COOLDOWN_SEC = 1.0  # pause after report
+LOST_FRAMES_LIMIT = 6  # end tracking if ball lost N frames
 
 def resize_keep_aspect(frame, target_w):
     h, w = frame.shape[:2]
-    if w == 0 or h == 0:
-        return frame
+    if w == 0 or h == 0: return frame
     scale = target_w / float(w)
     return cv2.resize(frame, (int(w*scale), int(h*scale)))
 
-def inside_roi(pt, roi):
-    if pt is None or roi is None:
-        return False
-    x, y = pt
-    x1, y1, x2, y2 = roi
-    return x1 <= x <= x2 and y1 <= y <= y2
+def rect_contains(pt, rect):
+    if pt is None or rect is None: return False
+    x,y = pt
+    return rect["x1"] <= x <= rect["x2"] and rect["y1"] <= y <= rect["y2"]
 
 def to_real_units(px_velocity, px_per_yard):
-    if px_velocity is None or px_per_yard is None or px_per_yard <= 0:
-        return None, None
-    yds_per_s = px_velocity / px_per_yard
-    mph = yds_per_s * (3600.0/1760.0)
-    return yds_per_s, mph
+    if px_velocity is None or px_per_yard is None or px_per_yard <= 0: return None, None
+    yps = px_velocity / px_per_yard
+    mph = yps * (3600.0/1760.0)
+    return yps, mph
 
-# --- Direction (HLA) helpers: 0 straight, LEFT negative, RIGHT positive, clamp [-60,60]
 def compute_hla(last_pos, cur_pos):
-    if last_pos is None or cur_pos is None:
-        return None
-    (x1,y1) = last_pos
-    (x2,y2) = cur_pos
+    if last_pos is None or cur_pos is None: return None
+    (x1,y1) = last_pos; (x2,y2) = cur_pos
     dx, dy = (x2-x1), (y2-y1)
-    heading_deg = math.degrees(math.atan2(-dy, dx))   # convert image coords (y down) to math coords (y up)
-    hla = -heading_deg  # left negative, right positive
-    if hla < -60: hla = -60.0
-    if hla > 60:  hla = 60.0
-    return hla
-
-def side_of_line(pt, line):
-    if pt is None or line is None:
-        return None
-    x, y = pt
-    x1,y1,x2,y2 = line["x1"], line["y1"], line["x2"], line["y2"]
-    return (x2 - x1)*(y - y1) - (y2 - y1)*(x - x1)
-
-def distance_to_line(pt, line):
-    if pt is None or line is None:
-        return None
-    x, y = pt
-    x1,y1,x2,y2 = map(float, (line["x1"], line["y1"], line["x2"], line["y2"]))
-    num = abs((y2-y1)*x - (x2-x1)*y + x2*y1 - y2*x1)
-    den = max(1e-6, math.hypot(x2-x1, y2-y1))
-    return num/den
+    heading = math.degrees(math.atan2(-dy, dx))  # y-up
+    hla = -heading  # left -, right +
+    return max(-60.0, min(60.0, hla))
 
 def post_shot(mph, yds_per_s, direction):
     s = appsettings.load()
-    post_cfg = s.get("post", {})
-    if not post_cfg.get("enabled", True):
-        log("POST disabled in settings; skipping.")
-        return False, None
-    host = post_cfg.get("host", "10.10.10.23")
-    port = int(post_cfg.get("port", 8888))
-    path = post_cfg.get("path", "/putting")
-    timeout = float(post_cfg.get("timeout_sec", 2.5))
-    url = f"http://{host}:{port}{path}"
-    payload = {
-        "ballData": {
-            "BallSpeed": f"{(mph or 0.0):.2f}",
-            "TotalSpin": 0,
-            "LaunchDirection": f"{(direction or 0.0):.2f}"
-        }
-    }
+    post = s.get("post", {})
+    if not post.get("enabled", True): return False, None
+    url = f"http://{post.get('host','10.10.10.23')}:{int(post.get('port',8888))}{post.get('path','/putting')}"
+    payload = {"ballData":{
+        "BallSpeed": f"{(mph or 0.0):.2f}",
+        "TotalSpin": 0,
+        "LaunchDirection": f"{(direction or 0.0):.2f}"
+    }}
     try:
-        res = requests.post(url, json=payload, timeout=timeout)
-        res.raise_for_status()
-        try:
-            data = res.json()
-        except ValueError:
-            data = None
-        log(f"POST OK -> {url} | sent {payload}")
-        if data is not None:
-            log(f"Response JSON: {data}")
+        r = requests.post(url, json=payload, timeout=float(post.get("timeout_sec",2.5)))
+        r.raise_for_status()
+        try: data = r.json()
+        except ValueError: data=None
+        log(f"POST OK -> {url} | {payload}")
         return True, data
-    except requests.exceptions.HTTPError as e:
-        log(f"HTTP error posting shot -> {url}: {e}")
     except requests.exceptions.RequestException as e:
-        log(f"Request error posting shot -> {url}: {e}")
-    return False, None
+        log(f"POST error -> {e}")
+        return False, None
 
 def main():
     s = appsettings.load()
-    show_mask = bool(s.get("show_mask", False))
-    target_w = int(s.get("target_width", 960))
-    min_report_mph = float(s.get("min_report_mph", 1.0))
+    show_mask   = bool(s.get("show_mask", False))
+    target_w    = int(s.get("target_width", 960))
+    min_mph     = float(s.get("min_report_mph", 1.0))
 
-    # Input source (camera/video)
+    # input source
     inp = s.get("input", {})
-    src_mode = inp.get("source", "camera")
-    if src_mode == "video":
-        video_path = inp.get("video_path", "testdata/my_putt.mp4")
-        loop_flag = bool(inp.get("loop", True))
-        camera = Camera(source=video_path, loop=loop_flag)
+    if inp.get("source","camera") == "video":
+        camera = Camera(source=inp.get("video_path","testdata/my_putt.mp4"), loop=bool(inp.get("loop",True)))
     else:
         camera = Camera(source=0)
 
     detector = BallDetector()
-    tracker = MotionTracker()
+    tracker  = MotionTracker()
 
-    # Timing from video FPS (and UI throttle) if using video
+    # dt override + UI throttle for video
     is_video = (inp.get("source") == "video")
-    vid_fps = 30.0
     wait_ms = 1
     if is_video:
-        cap_tmp = cv2.VideoCapture(inp.get("video_path", "testdata/my_putt.mp4"))
+        cap_tmp = cv2.VideoCapture(inp.get("video_path","testdata/my_putt.mp4"))
         vid_fps = cap_tmp.get(cv2.CAP_PROP_FPS) or 30.0
         cap_tmp.release()
-        try:
-            tracker.set_dt_override(1.0/float(vid_fps))
-        except Exception:
-            pass
-        try:
-            wait_ms = max(1, int(round(1000.0/float(vid_fps))))
-        except Exception:
-            wait_ms = 33
+        try: tracker.set_dt_override(1.0/float(vid_fps))
+        except Exception: pass
+        try: wait_ms = max(1, int(round(1000.0/float(vid_fps))))
+        except Exception: wait_ms = 33
     else:
-        try:
-            tracker.set_dt_override(None)
-        except Exception:
-            pass
-        wait_ms = 1
+        try: tracker.set_dt_override(None)
+        except Exception: pass
 
-    # Prime first frame; init ROI and Gate
-    frame_iter = camera.stream()
+    # first frame + init zones
+    frame_iter  = camera.stream()
     first_frame = next(frame_iter)
     h0, w0 = first_frame.shape[:2]
-    appsettings.ensure_roi_initialized(w0, h0)
+    appsettings.ensure_roi_initialized(w0, h0)            # legacy ROI kept
     appsettings.clamp_roi(w0, h0)
-    appsettings.ensure_gate_initialized(w0, h0)
-    appsettings.clamp_gate(w0, h0)
+    appsettings.ensure_zones_initialized(w0, h0)          # NEW
+    appsettings.clamp_zones(w0, h0)
 
     s = appsettings.load()
-    roi = (int(s["roi"]["startx"]), int(s["roi"]["starty"]), int(s["roi"]["endx"]), int(s["roi"]["endy"]))
+    stage = s["zones"]["stage_roi"].copy()
+    track = s["zones"]["track_roi"].copy()
 
     cv2.namedWindow("PuttTracker", cv2.WINDOW_NORMAL)
     editor = SliderEditor()
-    cal = CalibrationEditor()
+    cal    = CalibrationEditor()
     picker = ColorPicker("PuttTracker")
 
-    log("Controls: q=quit | m=mask | a=settings | c=calibrate | b=pick color")
+    log("Controls: q quit | m mask | a settings | c calibrate | b color pick")
+
+    # state machine
+    state = "IDLE"       # IDLE -> STAGED -> TRACKING -> (REPORT->COOLDOWN->IDLE)
+    lost_frames = 0
     last_pos = None
-    last_inside = False
     last_valid_velocity = None
     last_valid_direction = None
     last_shot_time = 0.0
-    sending_now = False
 
-    # NEW: gate crossing state
-    shot_armed = False
-    last_side = None
+    def yield_first(f, g):
+        yield f
+        for fr in g: yield fr
 
-    def yield_with_first(first, gen):
-        yield first
-        for f in gen:
-            yield f
-
-    for frame in yield_with_first(first_frame, frame_iter):
-        # display copy for overlays
+    for frame in yield_first(first_frame, frame_iter):
         disp = frame.copy()
 
+        # reload live settings each loop
         s = appsettings.load()
         show_mask = bool(s.get("show_mask", show_mask))
-        target_w = int(s.get("target_width", target_w))
-        roi = (int(s["roi"]["startx"]), int(s["roi"]["starty"]), int(s["roi"]["endx"]), int(s["roi"]["endy"]))
-        min_report_mph = float(s.get("min_report_mph", min_report_mph))
-        px_per_yard = s["calibration"]["px_per_yard"]
-        gate_enabled = bool(s.get("gate", {}).get("enabled", True))
-        gate_line = s.get("gate", {}).get("line", {"x1":0,"y1":h0//2,"x2":w0-1,"y2":h0//2})
+        target_w  = int(s.get("target_width", target_w))
+        min_mph   = float(s.get("min_report_mph", min_mph))
+        stage     = s["zones"]["stage_roi"]
+        track     = s["zones"]["track_roi"]
+        px_per_yd = s["calibration"]["px_per_yard"]
 
         paused = editor.active or cal.active or picker.active
         now = time.time()
 
-        # tag
-        banner(disp, "PAUSED" if paused else "RUNNING")
+        # draw zones
+        draw_zone(disp, stage, "STAGE", (0,200,255))
+        draw_zone(disp, track, "TRACK", (0,180,0))
 
-        # Always draw contextual lines
-        draw_gate_line(disp, gate_line, gate_enabled)
-        draw_roi(disp, roi)
-
+        # paused states
         if paused:
-            tracker.reset()
-            last_pos = None
-            last_inside = False
-            shot_armed = False
-            last_side = None
-
+            state = "IDLE" if state != "COOLDOWN" else state
+            tracker.reset(); last_pos=None; lost_frames=0
+            banner(disp, "PAUSED")
+            draw_status_dot(disp, 'yellow')
             if editor.active:
-                banner(disp, "SLIDER EDIT MODE (processing paused)")
-                help_box(disp, [
-                    "Adjust ROI & settings in 'PuttTracker Settings'",
-                    "a: close sliders | c: calibration | b: color pick | q: quit"
-                ])
-
+                help_box(disp, ["Adjust STAGE & TRACK rectangles", "Close with 'a' to resume"])
             if cal.active:
                 L = s["calibration"]["line"]
+                from utils.draw_utils import draw_calibration_line
                 draw_calibration_line(disp, L)
                 ppy = compute_px_per_yard()
-                txt = f"CALIBRATION: px/yd={ppy:.2f}" if ppy else "CALIBRATION: adjust line to yardstick"
-                banner(disp, txt)
-                help_box(disp, [
-                    "Align the YELLOW line with your yardstick",
-                    "Press 'c' to close and save"
-                ])
-
+                banner(disp, f"CALIBRATION: {ppy:.2f} px/yd" if ppy else "CALIBRATE LINE TO YARDSTICK")
             if picker.active:
                 picker.render_overlay(disp)
 
-            draw_status_dot(disp, 'yellow')
-
         else:
-            in_cooldown = (now - last_shot_time) < COOLDOWN_SEC
-
-            if in_cooldown:
-                tracker.reset()
+            # cooldown
+            if state == "COOLDOWN":
+                if (now - last_shot_time) >= COOLDOWN_SEC:
+                    state = "IDLE"
                 banner(disp, "COOLDOWN…")
                 draw_status_dot(disp, 'yellow')
-                # disarm during cooldown
-                shot_armed = False
-                last_side = None
             else:
-                center, radius = detector.detect(frame)  # detect on raw
-                in_area = inside_roi(center, roi)
+                # detect on raw frame
+                center, radius = detector.detect(frame)
 
-                velocity, direction = tracker.update(center if in_area else None)
-                if velocity is not None:
-                    last_valid_velocity = velocity
-                    last_valid_direction = direction
+                if center is None:
+                    lost_frames = min(999, lost_frames+1)
+                else:
+                    lost_frames = 0
 
-                yds_per_s, mph = to_real_units(velocity, px_per_yard)
+                # state transitions
+                if state == "IDLE":
+                    banner(disp, "IDLE")
+                    if rect_contains(center, stage):
+                        tracker.reset()
+                        last_pos = center
+                        state = "STAGED"
+                        log("Ball staged (armed).")
+                    draw_status_dot(disp, 'yellow')
 
-                # --- Gate crossing arming ---
-                if gate_enabled and in_area and center is not None:
-                    side = side_of_line(center, gate_line)
-                    # Only consider as crossing if not skimming the line
-                    dist = distance_to_line(center, gate_line)
-                    if last_side is not None and side is not None and dist is not None:
-                        if dist > 2.0 and last_side * side < 0:
-                            shot_armed = True
-                            log("Gate crossed: shot ARMED")
-                    last_side = side
+                elif state == "STAGED":
+                    banner(disp, "STAGED (waiting to enter TRACK)")
+                    draw_status_dot(disp, 'green' if rect_contains(center, stage) else 'yellow')
+                    # enter tracking when ball goes into track ROI
+                    if rect_contains(center, track):
+                        tracker.reset()
+                        last_pos = center
+                        state = "TRACKING"
+                        log("Tracking started (entered TRACK).")
 
-                # --- Exit ROI event (valid shot only if armed or gate disabled) ---
-                if last_inside and not in_area and last_valid_velocity is not None:
-                    if shot_armed or not gate_enabled:
-                        yps_exit, mph_exit = to_real_units(last_valid_velocity, px_per_yard)
-                        # Direction per your convention
-                        hla = compute_hla(last_pos, center if center is not None else last_pos)
-                        if mph_exit is None or mph_exit >= min_report_mph:
-                            if mph_exit is not None:
-                                log(f"SHOT: {mph_exit:.1f} mph ({yps_exit:.2f} yd/s) hla={0.0 if hla is None else hla:.2f}°")
-                            else:
-                                log(f"SHOT: vel={last_valid_velocity:.2f} px/s, hla={0.0 if hla is None else hla:.2f}°")
-                            # POST
-                            sending_now = True
-                            draw_status_dot(disp, 'red')
-                            cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w))
-                            cv2.waitKey(1)
-                            _ = post_shot(
-                                mph_exit if mph_exit is not None else 0.0,
-                                yps_exit if yps_exit is not None else 0.0,
-                                0.0 if hla is None else hla
-                            )
-                            sending_now = False
-                            last_shot_time = time.time()
-                        else:
-                            log(f"IGNORED (under {min_report_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
-                            last_shot_time = time.time()
+                elif state == "TRACKING":
+                    banner(disp, "TRACKING")
+                    if rect_contains(center, track) and center is not None:
+                        # update tracker only inside track ROI
+                        velocity, direction = tracker.update(center)
+                        if velocity is not None:
+                            last_valid_velocity = velocity
+                            last_valid_direction = direction
+                        yps, mph = to_real_units(velocity, px_per_yd)
+                        # overlays
+                        draw_ball(disp, center, radius or 0)
+                        if last_pos is not None:
+                            draw_vector(disp, last_pos, center)
+                        put_hud(disp, velocity, None, tracker.fps, mph, yps)
+                        draw_status_dot(disp, 'green')
+                        last_pos = center
                     else:
-                        log("Exit ROI without gate crossing: NOT ARMED (ignored)")
-                    # reset arming after any exit
-                    shot_armed = False
-                    last_side = None
+                        # left track ROI OR lost for a while → finalize
+                        should_finalize = True
+                        if rect_contains(center, track) is False and center is not None:
+                            should_finalize = True
+                        if lost_frames < LOST_FRAMES_LIMIT and center is None:
+                            should_finalize = False  # brief occlusion tolerance
+                        if should_finalize:
+                            yps_exit, mph_exit = to_real_units(last_valid_velocity, px_per_yd)
+                            hla = compute_hla(last_pos, center if center is not None else last_pos)
+                            if mph_exit is None or mph_exit >= min_mph:
+                                log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
+                                draw_status_dot(disp, 'red')
+                                cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w))
+                                cv2.waitKey(wait_ms)
+                                post_shot(mph_exit or 0.0, yps_exit or 0.0, hla or 0.0)
+                            else:
+                                log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
+                            state = "COOLDOWN"
+                            last_shot_time = time.time()
+                            tracker.reset()
+                            lost_frames = 0
+                    # end TRACKING
 
-                last_inside = in_area
+        # mask overlay (debug)
+        if show_mask and hasattr(detector, "last_mask") and detector.last_mask is not None:
+            mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
+            mh, mw = mask.shape[:2]
+            roi_small = disp[0:mh, 0:mw]
+            cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
 
-                # Overlays
-                draw_ball(disp, center if in_area else None, radius if in_area and radius else 0.0)
-                if in_area:
-                    draw_vector(disp, last_pos, center)
-                put_hud(
-                    disp,
-                    velocity if in_area else None,
-                    last_valid_direction if in_area else None,
-                    tracker.fps,
-                    mph=mph if in_area else None,
-                    yds=yds_per_s if in_area else None
-                )
-
-                if show_mask and detector.last_mask is not None:
-                    mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
-                    mh, mw = mask.shape[:2]
-                    roi_small = disp[0:mh, 0:mw]
-                    cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
-
-                # Status light: green when ball found inside ROI, yellow otherwise
-                draw_status_dot(disp, 'green' if (center is not None and in_area) else 'yellow')
-
-                last_pos = center if in_area else last_pos
-
-        # Show
+        # present
         preview = resize_keep_aspect(disp, target_w)
         cv2.imshow("PuttTracker", preview)
 
-        # Keys
-        key = cv2.waitKey(1 if not is_video else max(1, int(round(1000.0/(vid_fps or 30.0))))) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord('m'):
-            appsettings.set_value("show_mask", not bool(s.get("show_mask", False)))
-        elif key == ord('a'):
-            editor.toggle(w0, h0)
+        # keys
+        key = cv2.waitKey(wait_ms) & 0xFF
+        if key == ord('q'): break
+        elif key == ord('m'): appsettings.set_value("show_mask", not bool(s.get("show_mask", False)))
+        elif key == ord('a'): editor.toggle(w0, h0)
         elif key == ord('c'):
             if cal.active:
                 ppy = compute_px_per_yard()
-                if ppy:
-                    appsettings.set_value("calibration.px_per_yard", float(ppy))
-                    log(f"Calibration saved: {float(ppy):.2f} px/yard")
+                if ppy: appsettings.set_value("calibration.px_per_yard", float(ppy)); log(f"Calibration saved: {ppy:.2f} px/yd")
                 cal.toggle(w0, h0)
-            else:
-                cal.toggle(w0, h0)
+            else: cal.toggle(w0, h0)
         elif key == ord('b'):
-            if picker.active:
-                picker.commit(frame)
-                picker.toggle(w0, h0)
-                log("Ball color saved from slider picker.")
-            else:
-                picker.toggle(w0, h0)
+            if picker.active: picker.commit(frame); picker.toggle(w0, h0); log("Ball color saved.")
+            else: picker.toggle(w0, h0)
 
     editor.close(); cal.close(); picker.close()
     cv2.destroyAllWindows()
@@ -603,9 +579,5 @@ if __name__ == "__main__":
     main()
 EOF
 
-echo "✅ Gate line + HLA behavior added."
-echo "Backups: *.bak.gate"
-echo ""
-echo "Usage:"
-echo "  - Run:  source .venv/bin/activate && python3 src/main.py"
-echo "  - Gate config lives in settings.json -> gate.enabled, gate.line{x1,y1,x2,y2}"
+echo "✅ Switched to two-zone trigger: STAGE -> TRACK -> report"
+echo "Open settings with 'a' to move Stage/Track rectangles live."
