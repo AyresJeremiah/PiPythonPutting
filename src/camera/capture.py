@@ -1,4 +1,3 @@
-# src/camera/capture.py
 import cv2
 import threading
 import time
@@ -7,20 +6,10 @@ from typing import Union, Optional
 
 class Camera:
     """
-    Unified capture for webcam or video file with a threaded frame reader.
+    Unified capture for webcam or video file.
 
-    Usage:
-        cam = Camera(source=0)                             # live camera
-        cam = Camera(source="testdata/clip.mp4", loop=True)  # video file (loops)
-
-        for frame in cam.stream():
-            ...
-
-    Notes:
-      - For integer sources (webcams), we request MJPG @ 1280x720 @ 60 FPS.
-        Many cams only deliver 60 FPS if MJPG is requested.
-      - For file sources (strings), 'loop=True' restarts at EOF.
-      - 'stream()' yields the latest frame copy from a background reader thread.
+    - Live camera (int source): threaded reader for low-latency capture.
+    - Video file (str source): sequential reads in stream() to avoid frame skipping.
     """
 
     def __init__(
@@ -33,8 +22,8 @@ class Camera:
     ):
         self.source = source
         self.loop = bool(loop)
-        self._cap = cv2.VideoCapture(source if isinstance(source, str) else int(source))
 
+        self._cap = cv2.VideoCapture(source if isinstance(source, str) else int(source))
         if not self._cap.isOpened():
             raise RuntimeError(f"Failed to open source: {source}")
 
@@ -68,35 +57,29 @@ class Camera:
             except Exception:
                 pass
 
-        # Internal state for threaded reading
+        # Thread only for live cams
+        self._use_thread = not isinstance(source, str)
         self._frame = None
         self._lock = threading.Lock()
         self._stop = False
-        self._reader = threading.Thread(target=self._reader_loop, daemon=True)
-        self._reader.start()
 
-    # ---------------- internal reader ----------------
+        if self._use_thread:
+            self._reader = threading.Thread(target=self._reader_loop, daemon=True)
+            self._reader.start()
+
+    # ---------------- internal reader (live camera only) ----------------
     def _reader_loop(self):
         """Continuously read frames into a single-slot buffer."""
         while not self._stop:
             ret, frame = self._cap.read()
             if not ret:
-                # Handle EOF for file sources
-                if isinstance(self.source, str) and self.loop:
-                    # rewind and try again
-                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
-                # Give the producer a tiny break, then try again; if still failing, stop
                 time.sleep(0.002)
-                # One more attempt
                 ret, frame = self._cap.read()
                 if not ret:
                     break
-
             with self._lock:
                 self._frame = frame
 
-        # We’re exiting the reader loop; release on the way out
         try:
             self._cap.release()
         except Exception:
@@ -105,10 +88,29 @@ class Camera:
     # ---------------- public API ----------------
     def stream(self):
         """
-        Generator yielding the latest available frame (as a copy).
-        Will block briefly until the first frame arrives.
+        Generator yielding frames.
+
+        - Video file: sequential reads (no skipping). Loops if self.loop.
+        - Live camera: yields the latest frame from the thread buffer.
         """
-        # Wait for first frame
+        if not self._use_thread:
+            # Sequential read path for video files
+            while not self._stop:
+                ret, frame = self._cap.read()
+                if not ret:
+                    if isinstance(self.source, str) and self.loop:
+                        self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
+                    break
+                yield frame
+            # release on exit
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            return
+
+        # Live camera path (threaded)
         while not self._stop and self._frame is None:
             time.sleep(0.001)
 
@@ -118,18 +120,19 @@ class Camera:
             if frame is not None:
                 yield frame
             else:
-                # No frame available right now – tiny sleep to avoid busy-wait
                 time.sleep(0.001)
 
     def read_once(self):
         """Return the latest frame (copy) or None if not ready yet."""
+        if not self._use_thread:
+            ret, frame = self._cap.read()
+            return frame if ret else None
         with self._lock:
             return None if self._frame is None else self._frame.copy()
 
     def close(self):
-        """Stop the reader thread and release resources."""
+        """Stop and release."""
         self._stop = True
-        # Nudge the reader loop to exit quickly
         time.sleep(0.01)
         try:
             self._cap.release()

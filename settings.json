@@ -29,19 +29,20 @@
   },
   "ball_hsv": {
     "lower": [
-      23,
-      0,
-      92
+      17,
+      118,
+      0
     ],
     "upper": [
-      47,
-      65,
-      232
+      41,
+      238,
+      137
     ]
   },
   "input": {
     "source": "video",
-    "video_path": "testdata/better.mp4",
+    "playback_speed": 1,
+    "video_path": "../testdata/better.mp4",
     "loop": true
   },
   "gate": {
@@ -58,13 +59,13 @@
       "x1": 286,
       "y1": 403,
       "x2": 500,
-      "y2": 720
+      "y2": 914
     },
     "track_roi": {
       "x1": 500,
       "y1": 375,
       "x2": 1280,
-      "y2": 720
+      "y2": 902
     }
   }
 }

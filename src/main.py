@@ -89,7 +89,7 @@ def main():
         cap_tmp.release()
         try: tracker.set_dt_override(1.0/float(vid_fps))
         except Exception: pass
-        try: wait_ms = max(1, int(round(1000.0/float(vid_fps))))
+        try: wait_ms = max(1, int(round(1000.0 / (float(vid_fps) * float(inp.get("playback_speed", 1.0))))))
         except Exception: wait_ms = 33
     else:
         try: tracker.set_dt_override(None)
