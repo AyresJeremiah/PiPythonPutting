@@ -1,4 +1,4 @@
-import time, math, cv2, requests
+import time, math, cv2, requests, numpy as np
 from tracking.ball_detector import BallDetector
 from tracking.motion_tracker import MotionTracker
 from camera.capture import Camera
@@ -15,18 +15,15 @@ LOST_FRAMES_LIMIT = 6
 
 def resize_keep_aspect(frame, target_w):
     h, w = frame.shape[:2]
-    if w == 0 or h == 0: return frame
+    if w == 0 or h == 0:
+        return frame
     scale = target_w / float(w)
-    return cv2.resize(frame, (int(w*scale), int(h*scale)))
+    return cv2.resize(frame, (int(w * scale), int(h * scale)))
 
 def rect_contains(pt, rect):
-    if pt is None or rect is None: return False
-    x,y = pt
-    return rect["x1"] <= x <= x <= rect["x2"] and rect["y1"] <= y <= rect["y2"]
-
-def rect_contains(pt, rect):
-    if pt is None or rect is None: return False
-    x,y = pt
+    if pt is None or rect is None:
+        return False
+    x, y = pt
     return rect["x1"] <= x <= rect["x2"] and rect["y1"] <= y <= rect["y2"]
 
 def rect_union(a, b):
@@ -38,35 +35,50 @@ def rect_union(a, b):
     }
 
 def clamp_rect(rc, w, h):
-    rc["x1"] = max(0, min(int(rc["x1"]), w-1)); rc["x2"] = max(1, min(int(rc["x2"]), w))
-    rc["y1"] = max(0, min(int(rc["y1"]), h-1)); rc["y2"] = max(1, min(int(rc["y2"]), h))
-    if rc["x1"] >= rc["x2"]: rc["x2"] = min(w, rc["x1"]+1)
-    if rc["y1"] >= rc["y2"]: rc["y2"] = min(h, rc["y1"]+1)
+    rc["x1"] = max(0, min(int(rc["x1"]), w - 1))
+    rc["x2"] = max(1, min(int(rc["x2"]), w))
+    rc["y1"] = max(0, min(int(rc["y1"]), h - 1))
+    rc["y2"] = max(1, min(int(rc["y2"]), h))
+    if rc["x1"] >= rc["x2"]:
+        rc["x2"] = min(w, rc["x1"] + 1)
+    if rc["y1"] >= rc["y2"]:
+        rc["y2"] = min(h, rc["y1"] + 1)
 
 def to_real_units(px_velocity, px_per_yard):
-    if px_velocity is None or not px_per_yard or px_per_yard <= 0: return None, None
+    if px_velocity is None or not px_per_yard or px_per_yard <= 0:
+        return None, None
     yps = px_velocity / px_per_yard
-    mph = yps * (3600.0/1760.0)
+    mph = yps * (3600.0 / 1760.0)
     return yps, mph
 
 def compute_hla(last_pos, cur_pos):
-    if last_pos is None or cur_pos is None: return None
-    (x1,y1),(x2,y2) = last_pos, cur_pos
-    dx, dy = (x2-x1),(y2-y1)
+    if last_pos is None or cur_pos is None:
+        return None
+    (x1, y1), (x2, y2) = last_pos, cur_pos
+    dx, dy = (x2 - x1), (y2 - y1)
     heading = math.degrees(math.atan2(-dy, dx))
     hla = max(-60.0, min(60.0, -heading))  # left -, right +
     return hla
 
 def post_shot(mph, yps, direction, cfg):
     post = cfg.get("post", {})
-    if not post.get("enabled", True): return False, None
+    if not post.get("enabled", True):
+        return False, None
     url = f"http://{post.get('host','10.10.10.23')}:{int(post.get('port',8888))}{post.get('path','/putting')}"
-    payload = {"ballData":{"BallSpeed": f"{(mph or 0.0):.2f}","TotalSpin":0,"LaunchDirection":f"{(direction or 0.0):.2f}"}}
+    payload = {
+        "ballData": {
+            "BallSpeed": f"{(mph or 0.0):.2f}",
+            "TotalSpin": 0,
+            "LaunchDirection": f"{(direction or 0.0):.2f}"
+        }
+    }
     try:
-        r = requests.post(url, json=payload, timeout=float(post.get("timeout_sec",2.5)))
+        r = requests.post(url, json=payload, timeout=float(post.get("timeout_sec", 2.5)))
         r.raise_for_status()
-        try: data=r.json()
-        except ValueError: data=None
+        try:
+            data = r.json()
+        except ValueError:
+            data = None
         log(f"POST OK -> {url} | {payload}")
         return True, data
     except requests.exceptions.RequestException as e:
@@ -86,11 +98,13 @@ def main():
     px_per_yd   = cfg["calibration"]["px_per_yard"]
     detect_cfg  = cfg.get("detect", {})
     detect_scale= float(detect_cfg.get("scale", 0.75))
-    if detect_scale <= 0 or detect_scale > 1.0: detect_scale = 1.0
+    if detect_scale <= 0 or detect_scale > 1.0:
+        detect_scale = 1.0
 
     # Input source
-    if inp.get("source","camera") == "video":
-        camera = Camera(source=inp.get("video_path","testdata/my_putt.mp4"), loop=bool(inp.get("loop",True)))
+    if inp.get("source", "camera") == "video":
+        camera = Camera(source=inp.get("video_path", "testdata/my_putt.mp4"),
+                        loop=bool(inp.get("loop", True)))
     else:
         camera = Camera(source=0)
 
@@ -101,17 +115,23 @@ def main():
     is_video = (inp.get("source") == "video")
     wait_ms = 1
     if is_video:
-        cap_tmp = cv2.VideoCapture(inp.get("video_path","testdata/my_putt.mp4"))
+        cap_tmp = cv2.VideoCapture(inp.get("video_path", "testdata/my_putt.mp4"))
         vid_fps = cap_tmp.get(cv2.CAP_PROP_FPS) or 30.0
         cap_tmp.release()
-        try: tracker.set_dt_override(1.0/float(vid_fps))
-        except Exception: pass
+        try:
+            tracker.set_dt_override(1.0 / float(vid_fps))
+        except Exception:
+            pass
         speed = float(inp.get("playback_speed", 1.0))
-        try: wait_ms = max(1, int(round(1000.0/(float(vid_fps)*max(0.01, speed)))))
-        except Exception: wait_ms = 33
+        try:
+            wait_ms = max(1, int(round(1000.0 / (float(vid_fps) * max(0.01, speed)))))
+        except Exception:
+            wait_ms = 33
     else:
-        try: tracker.set_dt_override(None)
-        except Exception: pass
+        try:
+            tracker.set_dt_override(None)
+        except Exception:
+            pass
 
     # First frame + zones (initialize defaults from current frame size)
     frame_iter  = camera.stream()
@@ -125,6 +145,18 @@ def main():
     # Use the same cfg dict for stage/track (no reloads)
     stage = cfg["zones"]["stage_roi"]
     track = cfg["zones"]["track_roi"]
+
+    # --- Static zone overlay: draw once and reuse (only rebuild on change/reload) ---
+    zone_overlay = np.zeros_like(first_frame)
+
+    def rebuild_zone_overlay():
+        nonlocal zone_overlay
+        canvas = np.zeros_like(first_frame)
+        draw_zone(canvas, cfg["zones"]["stage_roi"], "STAGE", (0, 200, 255))
+        draw_zone(canvas, cfg["zones"]["track_roi"], "TRACK", (0, 180, 0))
+        zone_overlay = canvas
+
+    rebuild_zone_overlay()
 
     cv2.namedWindow("PuttTracker", cv2.WINDOW_NORMAL)
     editor = SliderEditor()
@@ -152,9 +184,11 @@ def main():
 
             # overlays reflect the single-load cfg (they won't move until next run)
             disp = frame.copy()
-            draw_zone(disp, stage, "STAGE", (0,200,255))
-            draw_zone(disp, track, "TRACK", (0,180,0))
-            banner(disp, "PAUSED"); draw_status_dot(disp, 'yellow')
+            # compose static zone overlay (drawn once)
+            disp = cv2.add(disp, zone_overlay)
+
+            banner(disp, "PAUSED")
+            draw_status_dot(disp, 'yellow')
             if editor.active:
                 help_box(disp, [
                     "Sliders write to settings.json immediately,",
@@ -168,12 +202,13 @@ def main():
                 cv2.putText(disp, f"px/yd preview: {ppy:.2f}" if ppy else "Calibrate line to yardstick",
                             (12, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
             if picker.active:
-                # picker may draw on current frame; harmless in paused mode
                 picker.render_overlay(disp)
 
             if not was_paused:
-                try: camera.pause()
-                except Exception: pass
+                try:
+                    camera.pause()
+                except Exception:
+                    pass
                 was_paused = True
 
             cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w))
@@ -181,8 +216,10 @@ def main():
             continue
         else:
             if was_paused:
-                try: camera.resume()
-                except Exception: pass
+                try:
+                    camera.resume()
+                except Exception:
+                    pass
                 was_paused = False
             try:
                 frame = next(frame_iter)
@@ -191,22 +228,21 @@ def main():
                 break
 
         disp = frame.copy()
-
-        # Draw zones (from cfg only)
-        draw_zone(disp, stage, "STAGE", (0,200,255))
-        draw_zone(disp, track, "TRACK", (0,180,0))
+        # compose static zone overlay (drawn once)
+        disp = cv2.add(disp, zone_overlay)
 
         now = time.time()
         if state == "COOLDOWN":
             if (now - last_shot_time) >= COOLDOWN_SEC:
                 state = "IDLE"
-            banner(disp, "COOLDOWN…"); draw_status_dot(disp, 'yellow')
+            banner(disp, "COOLDOWN…")
+            draw_status_dot(disp, 'yellow')
 
         else:
             # Detect only inside union(Stage, Track), downscaled if requested
             union = rect_union(stage, track)
             clamp_rect(union, w0, h0)
-            x1,y1,x2,y2 = union["x1"], union["y1"], union["x2"], union["y2"]
+            x1, y1, x2, y2 = union["x1"], union["y1"], union["x2"], union["y2"]
             crop = frame[y1:y2, x1:x2]
             if crop.size == 0:
                 center, radius = None, None
@@ -230,19 +266,27 @@ def main():
                         center, radius = None, None
 
             if center is None:
-                lost_frames = min(999, lost_frames+1)
+                lost_frames = min(999, lost_frames + 1)
             else:
                 lost_frames = 0
 
             if state == "IDLE":
-                banner(disp, "IDLE"); draw_status_dot(disp, 'yellow')
+                banner(disp, "IDLE")
+                draw_status_dot(disp, 'yellow')
                 if rect_contains(center, stage):
-                    tracker.reset(); last_pos = center; state = "STAGED"; log("Ball staged (armed).")
+                    tracker.reset()
+                    last_pos = center
+                    state = "STAGED"
+                    log("Ball staged (armed).")
 
             elif state == "STAGED":
-                banner(disp, "STAGED → enter TRACK to start"); draw_status_dot(disp, 'green' if rect_contains(center, stage) else 'yellow')
+                banner(disp, "STAGED → enter TRACK to start")
+                draw_status_dot(disp, 'green' if rect_contains(center, stage) else 'yellow')
                 if rect_contains(center, track):
-                    tracker.reset(); last_pos = center; state = "TRACKING"; log("Tracking started.")
+                    tracker.reset()
+                    last_pos = center
+                    state = "TRACKING"
+                    log("Tracking started.")
 
             elif state == "TRACKING":
                 banner(disp, "TRACKING")
@@ -252,7 +296,8 @@ def main():
                         last_valid_velocity = velocity
                     yps, mph = to_real_units(velocity, px_per_yd)
                     draw_ball(disp, center, radius or 0)
-                    if last_pos is not None: draw_vector(disp, last_pos, center)
+                    if last_pos is not None:
+                        draw_vector(disp, last_pos, center)
                     put_hud(disp, velocity, None, tracker.fps, mph, yps)
                     draw_status_dot(disp, 'green')
                     last_pos = center
@@ -265,23 +310,30 @@ def main():
                         hla = compute_hla(last_pos, center if center is not None else last_pos)
                         if mph_exit is None or mph_exit >= min_mph:
                             log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
-                            draw_status_dot(disp, 'red'); cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w)); cv2.waitKey(wait_ms)
+                            draw_status_dot(disp, 'red')
+                            cv2.imshow("PuttTracker", resize_keep_aspect(disp, target_w))
+                            cv2.waitKey(wait_ms)
                             post_shot(mph_exit or 0.0, yps_exit or 0.0, hla or 0.0, cfg)
                         else:
                             log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
-                        state = "COOLDOWN"; last_shot_time = time.time(); tracker.reset(); lost_frames=0
+                        state = "COOLDOWN"
+                        last_shot_time = time.time()
+                        tracker.reset()
+                        lost_frames = 0
 
         # Optional mask overlay (debug) — uses cfg-only flag
         if cfg.get("show_mask", False) and getattr(detector, "last_mask", None) is not None:
             mask = cv2.cvtColor(detector.last_mask, cv2.COLOR_GRAY2BGR)
-            mh, mw = mask.shape[:2]; roi_small = disp[0:mh, 0:mw]
+            mh, mw = mask.shape[:2]
+            roi_small = disp[0:mh, 0:mw]
             cv2.addWeighted(mask, 0.5, roi_small, 0.5, 0, roi_small)
 
         preview = resize_keep_aspect(disp, target_w)
         cv2.imshow("PuttTracker", preview)
 
         key = cv2.waitKey(wait_ms if is_video else 1) & 0xFF
-        if key == ord('q'): break
+        if key == ord('q'):
+            break
         elif key == ord('m'):
             # writes JSON, but this session keeps using startup cfg
             appsettings.set_value("show_mask", not bool(cfg.get("show_mask", False)))
@@ -298,7 +350,9 @@ def main():
                 cal.toggle(w0, h0)
         elif key == ord('b'):
             if picker.active:
-                picker.commit(frame); picker.toggle(w0, h0); log("Ball color saved (applies next run).")
+                picker.commit(frame)
+                picker.toggle(w0, h0)
+                log("Ball color saved (applies next run).")
             else:
                 picker.toggle(w0, h0)
 
