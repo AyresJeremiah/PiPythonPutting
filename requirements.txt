@@ -1,4 +1,19 @@
-opencv-python
-numpy
-imutils
-requests
+# Core
+fastapi>=0.115.0
+starlette>=0.40.0
+pydantic>=2.6,<3
+uvicorn>=0.30
+
+# Image/Video processing
+# For local dev on macOS/Windows, use opencv-python.
+# For Raspberry Pi / headless deploys, prefer opencv-python-headless (uncomment below and comment out opencv-python).
+opencv-python>=4.8.0.76
+# opencv-python-headless>=4.8.0.76
+numpy>=1.24
+
+# HTTP + static files
+requests>=2.31
+aiofiles>=23.2
+
+# Optional: faster JSON (FastAPI auto-detects if installed)
+orjson>=3.10
