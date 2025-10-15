@@ -1,6 +1,8 @@
 import requests
 
 def post_shot(mph, direction, cfg = None):
+    if direction < -60 or direction > 60:
+        return False
     post = cfg.get("post", {})
     if not post.get("enabled", True):
         return False, None
@@ -12,6 +14,7 @@ def post_shot(mph, direction, cfg = None):
             "LaunchDirection": f"{(direction or 0.0):.2f}"
         }
     }
+    print("POSTing to", url, "payload:", payload)
     try:
         r = requests.post(url, json=payload, timeout=float(post.get("timeout_sec", 2.5)))
         r.raise_for_status()

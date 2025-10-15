@@ -11,6 +11,16 @@ from src.utils.runtime_cfg import set_cfg
 COOLDOWN_SEC = 1.0
 LOST_FRAMES_LIMIT = 6
 
+# --- Optional: make PyCharm attach very early in debug runs ---
+import os
+if os.environ.get("PYCHARM_EARLY_DEBUG", "0") == "1":
+    try:
+        import pydevd_pycharm
+        # If you're debugging on the same machine, host='localhost'
+        pydevd_pycharm.settrace('localhost', port=5678, stdoutToServer=True, stderrToServer=True, suspend=False)
+    except Exception:
+        pass
+
 
 # ----------------- helpers -----------------
 def rect_contains(pt, rect):
@@ -52,10 +62,10 @@ def compute_hla(last_pos, cur_pos):
     if last_pos is None or cur_pos is None:
         return None
     (x1, y1), (x2, y2) = last_pos, cur_pos
-    dx, dy = (x2 - x1), (y2 - y1)
+    dx, dy = (x1 - x2), (y1 - y2)
     heading = math.degrees(math.atan2(-dy, dx))
     # Left negative, right positive, clamp [-60, 60]
-    return max(-60.0, min(60.0, -heading))
+    return heading
 
 
 def main():
@@ -314,6 +324,7 @@ def main():
     last_pos = None
     last_valid_velocity = None
     last_shot_time = 0.0
+    has_entered_tracking = False
 
     while True:
         try:
@@ -366,28 +377,35 @@ def main():
                     tracker.reset(); last_pos = center; state = "TRACKING"; log("Tracking started.")
 
             elif state == "TRACKING":
-                if rect_contains(center, track) and center is not None:
+                if rect_contains(center, track):
+                    # wait until we leave Stage, then start measuring
                     velocity, _ = tracker.update(center)
                     if velocity is not None:
                         last_valid_velocity = velocity
                     yps, mph = to_real_units(velocity, px_per_yd)
                     last_pos = center
+                    has_entered_tracking = True
                 else:
-                    finalize = True
-                    if center is None and lost_frames < LOST_FRAMES_LIMIT:
-                        finalize = False
-                    if finalize:
-                        yps_exit, mph_exit = to_real_units(last_valid_velocity, px_per_yd)
-                        hla = compute_hla(last_pos, center if center is not None else last_pos)
-                        if mph_exit is None or mph_exit >= min_mph:
-                            log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
-                            try:
-                                post_shot(mph_exit or 0.0, hla or 0.0, cfg)
-                            except Exception as e:
-                                log(f"POST error: {e}")
-                        else:
-                            log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
-                        state = "COOLDOWN"; last_shot_time = time.time(); tracker.reset(); lost_frames = 0
+                    if has_entered_tracking:
+                        has_entered_tracking = False
+                        state = "FINALIZE"
+
+            elif state == "FINALIZE":
+                finalize = True
+                if center is None and lost_frames < LOST_FRAMES_LIMIT:
+                    finalize = False
+                if finalize:
+                    yps_exit, mph_exit = to_real_units(last_valid_velocity, px_per_yd)
+                    hla = compute_hla(last_pos, center if center is not None else last_pos)
+                    if mph_exit is None or mph_exit >= min_mph:
+                        log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
+                        try:
+                            post_shot(mph_exit or 0.0, hla or 0.0, cfg)
+                        except Exception as e:
+                            log(f"POST error: {e}")
+                    else:
+                        log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
+                    state = "COOLDOWN"; last_shot_time = time.time(); tracker.reset(); lost_frames = 0
 
         # Optional mask overlay (debug) — front-end overlays are all client-side now
         disp = frame.copy()
