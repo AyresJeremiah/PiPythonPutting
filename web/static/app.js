@@ -2,6 +2,7 @@
   const img = document.getElementById('video');
   const canvas = document.getElementById('overlay');
   const ctx = canvas.getContext('2d');
+
   const elState = document.getElementById('state');
   const elStatus= document.getElementById('status');
   const elMPH   = document.getElementById('mph');
@@ -10,8 +11,8 @@
   const elFPS   = document.getElementById('fps');
 
   function fitCanvas() {
-    canvas.width  = img.clientWidth;
-    canvas.height = img.clientHeight;
+    canvas.width  = img.clientWidth || canvas.width;
+    canvas.height = img.clientHeight || canvas.height;
   }
   window.addEventListener('resize', fitCanvas);
   img.addEventListener('load', fitCanvas);
@@ -44,9 +45,9 @@
     elStatus.className = `dot ${c}`;
   }
 
+  // ---- Telemetry WS ----
   const proto = (location.protocol === 'https:') ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
-
   ws.onmessage = (ev) => {
     let data; try { data = JSON.parse(ev.data) } catch { return; }
     const W = (data.dims && data.dims.w) || img.naturalWidth || canvas.width;
@@ -55,26 +56,127 @@
     const sy = canvas.height / (H || 1);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const stage = data.stage, track = data.track;
-    drawRect(stage && {
-      x1: Math.round(stage.x1 * sx), y1: Math.round(stage.y1 * sy),
-      x2: Math.round(stage.x2 * sx), y2: Math.round(stage.y2 * sy)
-    }, '#0ff', 'STAGE');
-    drawRect(track && {
-      x1: Math.round(track.x1 * sx), y1: Math.round(track.y1 * sy),
-      x2: Math.round(track.x2 * sx), y2: Math.round(track.y2 * sy)
-    }, '#0f0', 'TRACK');
-
-    if (data.ball && typeof data.ball.x === 'number') {
-      drawDot(data.ball.x * sx, data.ball.y * sy, 5, '#fff');
-    }
+    if (data.stage) drawRect(scaleRect(data.stage, sx, sy), '#0ff', 'STAGE');
+    if (data.track) drawRect(scaleRect(data.track, sx, sy), '#0f0', 'TRACK');
+    if (data.ball) drawDot(data.ball.x * sx, data.ball.y * sy, 5, '#fff');
 
     elMPH.textContent = (data.mph ?? 0).toFixed(1);
     elYPS.textContent = (data.yps ?? 0).toFixed(2);
     elHLA.textContent = ((data.hla ?? 0)).toFixed(1) + '°';
     elFPS.textContent = Math.round(data.fps ?? 0);
-
     setStatus(data.state, !!data.ball);
   };
+  function scaleRect(rc, sx, sy) {
+    return { x1: Math.round(rc.x1*sx), y1: Math.round(rc.y1*sy), x2: Math.round(rc.x2*sx), y2: Math.round(rc.y2*sy) };
+  }
+
+  // ---- Settings panel ----
+  const ids = [
+    "target_width","min_report_mph","show_mask",
+    "input.source","input.video_path","input.loop","input.playback_speed",
+    "roi.startx","roi.starty","roi.endx","roi.endy",
+    "zones.stage_roi.x1","zones.stage_roi.y1","zones.stage_roi.x2","zones.stage_roi.y2",
+    "zones.track_roi.x1","zones.track_roi.y1","zones.track_roi.x2","zones.track_roi.y2",
+    "detect.scale","detect.min_radius",
+    "calibration.px_per_yard",
+    "post.host","post.port","post.path"
+  ];
+  const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
+
+  async function loadSettings() {
+    const res = await fetch('/settings');
+    const cfg = await res.json();
+    set('target_width', cfg.target_width);
+    set('min_report_mph', cfg.min_report_mph);
+    set('show_mask', !!cfg.show_mask);
+
+    set('input.source', cfg.input?.source ?? 'camera');
+    set('input.video_path', cfg.input?.video_path ?? '');
+    set('input.loop', !!cfg.input?.loop);
+    set('input.playback_speed', cfg.input?.playback_speed ?? 1.0);
+
+    const roi = cfg.roi || {};
+    set('roi.startx', roi.startx); set('roi.starty', roi.starty);
+    set('roi.endx', roi.endx);     set('roi.endy', roi.endy);
+
+    const st = cfg.zones?.stage_roi || {};
+    set('zones.stage_roi.x1', st.x1); set('zones.stage_roi.y1', st.y1);
+    set('zones.stage_roi.x2', st.x2); set('zones.stage_roi.y2', st.y2);
+
+    const tr = cfg.zones?.track_roi || {};
+    set('zones.track_roi.x1', tr.x1); set('zones.track_roi.y1', tr.y1);
+    set('zones.track_roi.x2', tr.x2); set('zones.track_roi.y2', tr.y2);
+
+    set('detect.scale', cfg.detect?.scale ?? 1.0);
+    set('detect.min_radius', cfg.detect?.min_radius ?? 3);
+
+    set('calibration.px_per_yard', cfg.calibration?.px_per_yard ?? 1);
+
+    set('post.host', cfg.post?.host ?? '');   // read-only
+    set('post.port', cfg.post?.port ?? 0);    // read-only
+    set('post.path', cfg.post?.path ?? '/putting');
+  }
+  function set(id, v) {
+    if (!(id in el) || el[id] === null) return;
+    if (el[id].type === 'checkbox') el[id].checked = !!v;
+    else el[id].value = (v ?? '');
+  }
+  function getCfgFromInputs() {
+    const v = (id) => (el[id]?.type === 'checkbox' ? !!el[id].checked : (Number.isNaN(+el[id].value) ? el[id].value : +el[id].value));
+    return {
+      target_width: +el["target_width"].value || 960,
+      min_report_mph: +el["min_report_mph"].value || 1.0,
+      show_mask: !!el["show_mask"].checked,
+      input: {
+        source: el["input.source"].value || "camera",
+        video_path: el["input.video_path"].value || "",
+        loop: !!el["input.loop"].checked,
+        playback_speed: +el["input.playback_speed"].value || 1.0
+      },
+      roi: {
+        startx: +el["roi.startx"].value || 0,
+        starty: +el["roi.starty"].value || 0,
+        endx: +el["roi.endx"].value || 0,
+        endy: +el["roi.endy"].value || 0
+      },
+      zones: {
+        stage_roi: {
+          x1: +el["zones.stage_roi.x1"].value || 0,
+          y1: +el["zones.stage_roi.y1"].value || 0,
+          x2: +el["zones.stage_roi.x2"].value || 1,
+          y2: +el["zones.stage_roi.y2"].value || 1
+        },
+        track_roi: {
+          x1: +el["zones.track_roi.x1"].value || 0,
+          y1: +el["zones.track_roi.y1"].value || 0,
+          x2: +el["zones.track_roi.x2"].value || 1,
+          y2: +el["zones.track_roi.y2"].value || 1
+        }
+      },
+      detect: {
+        scale: +el["detect.scale"].value || 1.0,
+        min_radius: +el["detect.min_radius"].value || 3
+      },
+      calibration: {
+        px_per_yard: +el["calibration.px_per_yard"].value || 1.0
+      },
+      post: {
+        host: el["post.host"].value,  // read-only in UI, but keep in payload
+        port: +el["post.port"].value,
+        path: el["post.path"].value || "/putting"
+      }
+    };
+  }
+
+  document.getElementById('btnReload').onclick = loadSettings;
+  document.getElementById('btnApply').onclick = async () => {
+    const cfg = getCfgFromInputs();
+    await fetch('/settings/preview', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg) });
+  };
+  document.getElementById('btnSave').onclick = async () => {
+    const cfg = getCfgFromInputs();
+    await fetch('/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg) });
+  };
+
+  loadSettings();
 })();

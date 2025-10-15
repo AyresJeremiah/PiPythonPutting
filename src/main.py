@@ -12,8 +12,8 @@ import settings as appsettings
 from ui.slider_editor import SliderEditor
 from ui.calibration_editor import CalibrationEditor, compute_px_per_yard
 from ui.color_picker import ColorPicker
-from ui.preview import PreviewUI     # macOS-safe; uses ui.poll()
-from ui.webui import WebUI           # FastAPI MJPEG + WS
+from ui.preview import PreviewUI      # macOS-safe (uses ui.poll() on main thread)
+from ui.webui import WebUI            # FastAPI MJPEG + WS
 from utils.runtime_cfg import set_cfg
 
 COOLDOWN_SEC = 1.0
@@ -61,7 +61,7 @@ def compute_hla(last_pos, cur_pos):
     (x1, y1), (x2, y2) = last_pos, cur_pos
     dx, dy = (x2 - x1), (y2 - y1)
     heading = math.degrees(math.atan2(-dy, dx))
-    # Left is negative, right is positive, bounds [-60, 60]
+    # Left negative, right positive, clamp [-60, 60]
     return max(-60.0, min(60.0, -heading))
 
 
@@ -70,7 +70,7 @@ def main():
 
     # === LOAD SETTINGS ONCE ===
     cfg = appsettings.load()
-    set_cfg(cfg)  # shared in-memory config for other modules
+    set_cfg(cfg)  # shared in-memory config
 
     target_w   = int(cfg.get("target_width", 960))
     min_mph    = float(cfg.get("min_report_mph", 1.0))
@@ -81,7 +81,7 @@ def main():
     if detect_scale <= 0 or detect_scale > 1.0:
         detect_scale = 1.0
 
-    # Input source selection
+    # Input source
     if inp.get("source", "camera") == "video":
         camera = Camera(source=inp.get("video_path", "testdata/my_putt.mp4"),
                         loop=bool(inp.get("loop", True)))
@@ -113,13 +113,11 @@ def main():
         except Exception:
             pass
 
-    # UI & Web UI
+    # UI (main-thread pump on macOS) — start now
     ui = PreviewUI(title="PuttTracker", target_width=target_w, wait_ms=(wait_ms if is_video else 1))
     ui.start()
-    web = WebUI(port=8080, jpeg_quality=80)
-    web.start()
 
-    # First frame + zones
+    # First frame & zone setup
     frame_iter  = camera.stream()
     first_frame = next(frame_iter)
     h0, w0 = first_frame.shape[:2]
@@ -128,6 +126,7 @@ def main():
     appsettings.ensure_zones_initialized(w0, h0)
     appsettings.clamp_zones(w0, h0)
 
+    # Use cfg dict (already loaded) for zones
     stage = cfg["zones"]["stage_roi"]
     track = cfg["zones"]["track_roi"]
 
@@ -141,6 +140,84 @@ def main():
         zone_overlay = canvas
     rebuild_zone_overlay()
 
+    # ---- Settings management (live preview + save) ----
+    def _atomic_write_settings(cfg_dict):
+        # atomic write to project-root settings.json
+        import tempfile, json, os
+        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
+        d = os.path.dirname(settings_path)
+        os.makedirs(d, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix="settings.", suffix=".json", dir=d)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(cfg_dict, f, indent=2)
+            os.replace(tmp, settings_path)
+        finally:
+            try: os.remove(tmp)
+            except Exception: pass
+
+    def _rebuild_from_cfg():
+        nonlocal target_w, min_mph, inp, px_per_yd, detect_scale, stage, track, zone_overlay, wait_ms, is_video
+        # refresh scalars
+        target_w   = int(cfg.get("target_width", target_w))
+        min_mph    = float(cfg.get("min_report_mph", min_mph))
+        inp        = cfg.get("input", inp)
+        px_per_yd  = cfg.get("calibration",{}).get("px_per_yard", px_per_yd)
+        detect_scale = float(cfg.get("detect",{}).get("scale", detect_scale))
+        if detect_scale <= 0 or detect_scale > 1.0:
+            detect_scale = 1.0
+        # refresh rects from cfg
+        stage = cfg["zones"]["stage_roi"]
+        track = cfg["zones"]["track_roi"]
+        # rebuild overlay
+        canvas = np.zeros_like(first_frame)
+        draw_zone(canvas, stage, "STAGE", (0, 200, 255))
+        draw_zone(canvas, track, "TRACK", (0, 180, 0))
+        zone_overlay = canvas
+        # refresh UI width
+        try:
+            ui.set_target_width(target_w)
+        except Exception:
+            pass
+        # refresh video pacing if source/video/playback changed
+        is_video = (inp.get("source") == "video")
+        if is_video:
+            _cap = cv2.VideoCapture(inp.get("video_path", "testdata/my_putt.mp4"))
+            _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
+            _cap.release()
+            try: tracker.set_dt_override(1.0/float(_fps))
+            except Exception: pass
+            try:
+                wait_ms = max(1, int(round(1000.0 / (float(_fps) * max(0.01, float(inp.get("playback_speed",1.0)))))))
+            except Exception:
+                wait_ms = 33
+        else:
+            try: tracker.set_dt_override(None)
+            except Exception: pass
+
+    def _deep_merge(dst, src):
+        for k, v in src.items():
+            if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                _deep_merge(dst[k], v)
+            else:
+                dst[k] = v
+
+    def _apply_preview(new_cfg: dict):
+        _deep_merge(cfg, new_cfg)
+        _rebuild_from_cfg()
+
+    def _apply_save(new_cfg: dict):
+        _apply_preview(new_cfg)
+        _atomic_write_settings(cfg)
+
+    # Web UI — create & wire AFTER handlers exist
+    web = WebUI(port=8080, jpeg_quality=80)
+    web.set_cfg_provider(lambda: cfg)
+    web.on_settings_preview(_apply_preview)
+    web.on_settings_save(_apply_save)
+    web.start()
+
+    # Editors (still available if you open native window)
     editor = SliderEditor()
     cal    = CalibrationEditor()
     picker = ColorPicker("PuttTracker")
@@ -157,7 +234,7 @@ def main():
     frozen_frame = first_frame.copy()
     was_paused = False
 
-    # Loop vars initialized
+    # Loop vars
     center, radius = None, None
     mph, yps = None, None
 
@@ -167,16 +244,15 @@ def main():
         if paused:
             # Freeze on last frame
             frame = frozen_frame.copy()
-            disp = cv2.add(frame.copy(), zone_overlay)
+            disp  = cv2.add(frame.copy(), zone_overlay)
 
             banner(disp, "PAUSED")
             draw_status_dot(disp, 'yellow')
 
             if editor.active:
                 help_box(disp, [
-                    "Sliders write to settings.json immediately,",
-                    "but this run uses startup config only.",
-                    "Press 'a' to close, restart app to apply."
+                    "Adjust in Web UI for live preview",
+                    "Press 'a' to close native sliders",
                 ])
             if cal.active:
                 from utils.draw_utils import draw_calibration_line
@@ -188,19 +264,15 @@ def main():
                 picker.render_overlay(disp)
 
             if not was_paused:
-                try:
-                    camera.pause()
-                except Exception:
-                    pass
+                try: camera.pause()
+                except Exception: pass
                 was_paused = True
 
-            # Show & web push
+            # Show + web push
             ui.show(disp)
-        fps_val = getattr(tracker, 'fps', None)
-        try:
-            fps_val = 0.0 if fps_val is None else float(fps_val)
-        except (TypeError, ValueError):
-            fps_val = 0.0
+            fps_val = getattr(tracker, "fps", None)
+            try: fps_val = 0.0 if fps_val is None else float(fps_val)
+            except (TypeError, ValueError): fps_val = 0.0
             tele = {
                 'stage': {'x1': int(stage['x1']), 'y1': int(stage['y1']), 'x2': int(stage['x2']), 'y2': int(stage['y2'])},
                 'track': {'x1': int(track['x1']), 'y1': int(track['y1']), 'x2': int(track['x2']), 'y2': int(track['y2'])},
@@ -215,7 +287,7 @@ def main():
             except Exception:
                 pass
 
-            # Keys (main-thread pump on macOS)
+            # Keys (native window path)
             key = ui.poll()
             if key == ord('q'):
                 break
@@ -234,9 +306,7 @@ def main():
                     cal.toggle(w0, h0)
             elif key == ord('b'):
                 if picker.active:
-                    picker.commit(frame)
-                    picker.toggle(w0, h0)
-                    log("Ball color saved (applies next run).")
+                    picker.commit(frame); picker.toggle(w0, h0); log("Ball color saved (applies next run).")
                 else:
                     picker.toggle(w0, h0)
 
@@ -245,10 +315,8 @@ def main():
 
         # Resuming from pause
         if was_paused:
-            try:
-                camera.resume()
-            except Exception:
-                pass
+            try: camera.resume()
+            except Exception: pass
             was_paused = False
 
         # Next frame
@@ -259,9 +327,9 @@ def main():
             break
 
         disp = cv2.add(frame.copy(), zone_overlay)
-        now = time.time()
+        now  = time.time()
 
-        # Default per-iter values
+        # Defaults
         center, radius = None, None
         mph, yps = None, None
 
@@ -272,7 +340,7 @@ def main():
             draw_status_dot(disp, 'yellow')
 
         else:
-            # Detect inside Stage ∪ Track (optionally downscaled)
+            # Detect inside Stage ∪ Track (possibly downscaled)
             union = rect_union(stage, track)
             clamp_rect(union, w0, h0)
             x1, y1, x2, y2 = union["x1"], union["y1"], union["x2"], union["y2"]
@@ -299,22 +367,15 @@ def main():
                 lost_frames = 0
 
             if state == "IDLE":
-                banner(disp, "IDLE")
-                draw_status_dot(disp, 'yellow')
+                banner(disp, "IDLE"); draw_status_dot(disp, 'yellow')
                 if rect_contains(center, stage):
-                    tracker.reset()
-                    last_pos = center
-                    state = "STAGED"
-                    log("Ball staged (armed).")
+                    tracker.reset(); last_pos = center; state = "STAGED"; log("Ball staged (armed).")
 
             elif state == "STAGED":
                 banner(disp, "STAGED → enter TRACK to start")
                 draw_status_dot(disp, 'green' if rect_contains(center, stage) else 'yellow')
                 if rect_contains(center, track):
-                    tracker.reset()
-                    last_pos = center
-                    state = "TRACKING"
-                    log("Tracking started.")
+                    tracker.reset(); last_pos = center; state = "TRACKING"; log("Tracking started.")
 
             elif state == "TRACKING":
                 banner(disp, "TRACKING")
@@ -338,18 +399,13 @@ def main():
                         hla = compute_hla(last_pos, center if center is not None else last_pos)
                         if mph_exit is None or mph_exit >= min_mph:
                             log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
-                            draw_status_dot(disp, 'red')
-                            # POST to GSPro service
                             try:
                                 post_shot(mph_exit or 0.0, yps_exit or 0.0, hla or 0.0)
                             except Exception as e:
                                 log(f"POST error: {e}")
                         else:
                             log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
-                        state = "COOLDOWN"
-                        last_shot_time = time.time()
-                        tracker.reset()
-                        lost_frames = 0
+                        state = "COOLDOWN"; last_shot_time = time.time(); tracker.reset(); lost_frames = 0
 
         # Optional mask overlay
         if cfg.get("show_mask", False) and getattr(detector, "last_mask", None) is not None:
@@ -360,11 +416,9 @@ def main():
 
         # Show + web push
         ui.show(disp)
-        fps_val = getattr(tracker, 'fps', None)
-        try:
-            fps_val = 0.0 if fps_val is None else float(fps_val)
-        except (TypeError, ValueError):
-            fps_val = 0.0
+        fps_val = getattr(tracker, "fps", None)
+        try: fps_val = 0.0 if fps_val is None else float(fps_val)
+        except (TypeError, ValueError): fps_val = 0.0
         tele = {
             'stage': {'x1': int(stage['x1']), 'y1': int(stage['y1']), 'x2': int(stage['x2']), 'y2': int(stage['y2'])},
             'track': {'x1': int(track['x1']), 'y1': int(track['y1']), 'x2': int(track['x2']), 'y2': int(track['y2'])},
@@ -381,7 +435,7 @@ def main():
         except Exception:
             pass
 
-        # Keys
+        # Keys (native window path)
         key = ui.poll()
         if key == ord('q'):
             break
@@ -400,9 +454,7 @@ def main():
                 cal.toggle(w0, h0)
         elif key == ord('b'):
             if picker.active:
-                picker.commit(frame)
-                picker.toggle(w0, h0)
-                log("Ball color saved (applies next run).")
+                picker.commit(frame); picker.toggle(w0, h0); log("Ball color saved (applies next run).")
             else:
                 picker.toggle(w0, h0)
 
@@ -412,10 +464,8 @@ def main():
 
     # Cleanup
     editor.close(); cal.close(); picker.close()
-    try:
-        ui.stop()
-    except Exception:
-        pass
+    try: ui.stop()
+    except Exception: pass
     cv2.destroyAllWindows()
 
 

@@ -3,29 +3,34 @@ import json
 import time
 import asyncio
 import threading
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 from threading import Condition
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 class WebUI:
     """
-    Tiny FastAPI server:
+    FastAPI server embedded in the app:
 
-      GET  /            -> index.html
-      GET  /video.mjpg  -> MJPEG live stream (downsampled by JPEG quality)
-      WS   /ws          -> server-push telemetry ~20 Hz (client doesn't need to send)
+      GET  /                 -> index.html
+      GET  /video.mjpg       -> MJPEG stream
+      WS   /ws               -> telemetry push (20Hz)
+      GET  /settings         -> current in-memory settings (provided by app)
+      POST /settings/preview -> apply live (no file write)
+      POST /settings/save    -> persist to disk (app handles file write safely)
 
-    Use:
-      web = WebUI(port=8080)
-      web.start()
-      ...
-      web.push_frame(bgr_frame)
-      web.push_telemetry({...})
+    Main should wire:
+      web.set_cfg_provider(lambda: cfg)
+      web.on_settings_preview(apply_preview_fn)
+      web.on_settings_save(save_fn)
+
+    Also call:
+      web.push_frame(bgr_np)
+      web.push_telemetry(dict)
     """
     def __init__(self, host: str = "0.0.0.0", port: int = 8080, jpeg_quality: int = 80):
         self.host = host
@@ -38,14 +43,31 @@ class WebUI:
         self._app.get("/")(self._index)
         self._app.get("/video.mjpg")(self._mjpeg)
         self._app.websocket("/ws")(self._ws_handler)
+        self._app.get("/settings")(self._get_settings)
+        self._app.post("/settings/preview")(self._post_preview)
+        self._app.post("/settings/save")(self._post_save)
 
         self._latest_jpeg: Optional[bytes] = None
         self._frame_cv = Condition()
         self._telemetry: Dict[str, Any] = {}
 
-        self._clients: List[WebSocket] = []
         self._stop = False
         self._thread = threading.Thread(target=self._run, daemon=True)
+
+        # Callbacks supplied by main
+        self._get_cfg_cb: Optional[Callable[[], Dict[str, Any]]] = None
+        self._on_preview_cb: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._on_save_cb: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    # ---------- wiring from main ----------
+    def set_cfg_provider(self, fn: Callable[[], Dict[str, Any]]):
+        self._get_cfg_cb = fn
+
+    def on_settings_preview(self, fn: Callable[[Dict[str, Any]], None]):
+        self._on_preview_cb = fn
+
+    def on_settings_save(self, fn: Callable[[Dict[str, Any]], None]):
+        self._on_save_cb = fn
 
     # ---------- public API ----------
     def start(self):
@@ -71,21 +93,20 @@ class WebUI:
     def push_telemetry(self, payload: Dict[str, Any]):
         self._telemetry = payload
 
-    # ---------- server ----------
+    # ---------- server loop ----------
     def _run(self):
         uvicorn.run(self._app, host=self.host, port=self.port,
                     log_level="warning", access_log=False)
 
+    # ---------- endpoints ----------
     async def _index(self):
         index = Path(__file__).resolve().parents[2] / "web" / "static" / "index.html"
         return FileResponse(str(index))
 
     async def _mjpeg(self):
         boundary = "frame"
-
         async def gen():
             from starlette.concurrency import run_in_threadpool
-            # simple keep-alive frame-less chunks until first frame arrives
             while not self._stop:
                 with self._frame_cv:
                     if self._latest_jpeg is None:
@@ -96,25 +117,42 @@ class WebUI:
                 yield (f"--{boundary}\r\n"
                        f"Content-Type: image/jpeg\r\n"
                        f"Content-Length: {len(data)}\r\n\r\n").encode() + data + b"\r\n"
-                await run_in_threadpool(time.sleep, 1/30.0)  # ~30 fps write
+                await run_in_threadpool(time.sleep, 1/30.0)
         return StreamingResponse(gen(),
                                  media_type=f"multipart/x-mixed-replace; boundary={boundary}")
 
     async def _ws_handler(self, ws: WebSocket):
         await ws.accept()
-        self._clients.append(ws)
         try:
             while True:
-                # Push telemetry ~20 Hz; don't wait for client messages
-                try:
-                    await ws.send_text(json.dumps(self._telemetry))
-                except Exception:
-                    break
-                await asyncio.sleep(0.05)
+                await ws.send_json(self._telemetry)
+                await asyncio.sleep(0.05)  # 20 Hz
         except WebSocketDisconnect:
             pass
         except Exception:
             pass
-        finally:
-            if ws in self._clients:
-                self._clients.remove(ws)
+
+    async def _get_settings(self):
+        if not self._get_cfg_cb:
+            return JSONResponse({"error": "cfg provider not set"}, status_code=500)
+        cfg = self._get_cfg_cb()
+        # do not allow editing post.host/port from UI; keep but mark read-only client-side
+        return JSONResponse(cfg)
+
+    async def _post_preview(self, request: Request):
+        payload = await request.json()
+        if self._on_preview_cb:
+            try:
+                self._on_preview_cb(payload)
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": True})
+
+    async def _post_save(self, request: Request):
+        payload = await request.json()
+        if self._on_save_cb:
+            try:
+                self._on_save_cb(payload)
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": True})
