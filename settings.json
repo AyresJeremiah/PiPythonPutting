@@ -21,7 +21,7 @@
   },
   "min_report_mph": 0.0,
   "post": {
-    "enabled": false,
+    "enabled": true,
     "host": "10.10.10.23",
     "port": 8888,
     "path": "/putting",
