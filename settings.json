@@ -4,9 +4,9 @@
   "show_mask": false,
   "target_width": 3840,
   "roi": {
-    "startx": 278,
+    "startx": 243,
     "endx": 968,
-    "starty": 625,
+    "starty": 393,
     "endy": 720
   },
   "calibration": {
@@ -57,9 +57,9 @@
   },
   "zones": {
     "stage_roi": {
-      "x1": 558,
+      "x1": 258,
       "y1": 404,
-      "x2": 486,
+      "x2": 559,
       "y2": 914
     },
     "track_roi": {
