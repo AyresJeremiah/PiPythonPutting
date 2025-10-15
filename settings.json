@@ -63,10 +63,8 @@
   },
   "camera": {
     "fourcc": "YUYV",
-    // your device supports YUYV; MJPG is NOT listed
-    "width": 640,
-    // start conservative; bump later to 1280x720
-    "height": 480,
+    "width": 320,
+    "height": 240,
     "fps": 30,
     "brightness": 172,
     "contrast": 45,
@@ -76,11 +74,9 @@
     "exposure": 200,
     "wb_temp": 4500,
     "exposure_auto": 1,
-    // turn AUTO ON first to prove frames arrive
     "wb_auto": 1
   },
   "target_width": 960,
-  // your UI preview was 3840; drop it while debugging
   "input": {
     "source": "camera",
     "camera_index": 0,
