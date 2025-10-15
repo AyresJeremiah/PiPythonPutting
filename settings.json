@@ -71,6 +71,7 @@
     }
   },
   "camera": {
+    "fourcc": "YUYV",
     "brightness": 172,
     "contrast": 45,
     "saturation": 128,
