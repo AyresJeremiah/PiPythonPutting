@@ -206,9 +206,18 @@ class PiCam2Camera:
             try: self.picam2.set_controls({"AnalogueGain": float(gain)})
             except Exception: pass
 
-        if denoise:
-            try: self.picam2.set_controls({"NoiseReductionMode": denoise})
-            except Exception: pass
+        from libcamera import controls
+        # Map friendly strings -> libcamera enums
+        NR_MAP = {
+            "off": controls.draft.NoiseReductionModeEnum.Off,
+            "minimal": controls.draft.NoiseReductionModeEnum.Minimal,
+            "fast": controls.draft.NoiseReductionModeEnum.Fast,
+            "hq": controls.draft.NoiseReductionModeEnum.HighQuality,
+            "high_quality": controls.draft.NoiseReductionModeEnum.HighQuality,
+        }
+        if denoise is not None:
+            mode = NR_MAP.get(str(denoise).lower(), controls.draft.NoiseReductionModeEnum.Off)
+            self.picam2.set_controls({"NoiseReductionMode": mode})
 
         self.picam2.start()
         self._frame = None
