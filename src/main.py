@@ -2,7 +2,7 @@ import time, math, cv2, numpy as np
 from src.services.gspro import post_shot
 from src.tracking.ball_detector import BallDetector
 from src.tracking.motion_tracker import MotionTracker
-from src.camera.capture import Camera
+from src.camera.capture import Camera as CvCamera, PiCam2Camera
 from src.utils.logger import log
 import src.settings as appsettings
 from src.ui.webui import WebUI
@@ -75,16 +75,33 @@ def main():
         detect_scale = 1.0
 
     # Input source
+    inp = cfg.get("input", {})
+    cam_cfg = cfg.get("camera", {})
+    backend = inp.get("backend", "v4l2")  # "picam2" on Pi, "v4l2" elsewhere
+
     if inp.get("source", "camera") == "video":
-        camera = Camera(source=inp.get("video_path", "testdata/my_putt.mp4"),
-                        loop=bool(inp.get("loop", True)))
+        camera = CvCamera(source=inp.get("video_path","testdata/my_putt.mp4"), loop=bool(inp.get("loop", True)))
+        is_video = True
     else:
-        cam_cfg = cfg.get('camera', {})
-        camera = Camera(
-            source=0,
-            width=int(cam_cfg.get('width', 1280)),
-            height=int(cam_cfg.get('height', 720))
-        )
+        is_video = False
+        if backend == "picam2":
+            camera = PiCam2Camera(
+                width=cam_cfg.get("width", 1332),
+                height=cam_cfg.get("height", 990),
+                fps=cam_cfg.get("fps", 120),
+                shutter_us=cam_cfg.get("shutter_us", 5000),
+                gain=cam_cfg.get("gain", 1.5),
+                denoise=cam_cfg.get("denoise", "off"),
+            )
+        else:
+            camera = CvCamera(
+                source=inp.get("camera_index", 0),
+                width=cam_cfg.get("width", 1280),
+                height=cam_cfg.get("height", 720),
+                pixel_format=cam_cfg.get("fourcc", "YUYV"),
+                fps=cam_cfg.get("fps", 0)  # 0 => don't force fps
+            )
+
 
     detector = BallDetector()
     tracker  = MotionTracker()

@@ -173,3 +173,94 @@ class Camera:
         h = self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         f = self._cap.get(cv2.CAP_PROP_FPS)
         return int(w), int(h), float(f if f else 0.0)
+
+
+class PiCam2Camera:
+    """Picamera2 capture feeding numpy frames to OpenCV pipeline."""
+    def __init__(self, width=1332, height=990, fps=120, shutter_us=None, gain=None, denoise="off"):
+        from picamera2 import Picamera2
+        try:
+            from libcamera import controls  # noqa: F401
+        except Exception:
+            pass
+        import threading, time
+
+        self.picam2 = Picamera2()
+        cfg = self.picam2.create_video_configuration(
+            main={"size": (int(width), int(height)), "format": "RGB888"},
+        )
+        self.picam2.configure(cfg)
+
+        # FrameDurationLimits = 1e6/fps (microseconds). If fps is falsy, skip.
+        if fps:
+            try:
+                self.picam2.set_controls({"FrameDurationLimits": (int(1e6//fps), int(1e6//fps))})
+            except Exception:
+                pass
+
+        if shutter_us:
+            try: self.picam2.set_controls({"ExposureTime": int(shutter_us)})
+            except Exception: pass
+
+        if gain:
+            try: self.picam2.set_controls({"AnalogueGain": float(gain)})
+            except Exception: pass
+
+        if denoise:
+            try: self.picam2.set_controls({"NoiseReductionMode": denoise})
+            except Exception: pass
+
+        self.picam2.start()
+        self._frame = None
+        self._lock = threading.Lock()
+        self._stop = False
+
+        def _reader():
+            while not self._stop:
+                arr = self.picam2.capture_array()  # RGB888 numpy
+                with self._lock:
+                    self._frame = arr
+            try:
+                self.picam2.stop()
+            except Exception:
+                pass
+
+        self._t = threading.Thread(target=_reader, daemon=True)
+        self._t.start()
+
+    def stream(self):
+        import time
+        while not self._stop and self._frame is None:
+            time.sleep(0.001)
+        while not self._stop:
+            with self._lock:
+                f = None if self._frame is None else self._frame.copy()
+            if f is not None:
+                yield f
+            else:
+                time.sleep(0.001)
+
+    def read_once(self):
+        with self._lock:
+            return None if self._frame is None else self._frame.copy()
+
+    def pause(self):
+        self._stop = True
+
+    def resume(self):
+        if self._stop:
+            self._stop = False
+
+    def close(self):
+        self._stop = True
+        try:
+            self.picam2.stop()
+        except Exception:
+            pass
+
+    def negotiated(self):
+        try:
+            s = self.picam2.stream_configuration("main")["size"]
+            return int(s[0]), int(s[1]), 0.0
+        except Exception:
+            return 0,0,0.0

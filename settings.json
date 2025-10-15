@@ -74,7 +74,9 @@
     "exposure": 200,
     "wb_temp": 4500,
     "exposure_auto": 1,
-    "wb_auto": 1
+    "wb_auto": 1,
+    "shutter_us": 5000,
+    "denoise": "off"
   },
   "target_width": 960,
   "input": {
@@ -82,6 +84,7 @@
     "camera_index": 0,
     "playback_speed": 1.0,
     "loop": true,
-    "speed_affects_metrics": false
+    "speed_affects_metrics": false,
+    "backend": "picam2"
   }
 }
