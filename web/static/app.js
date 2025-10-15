@@ -1,5 +1,5 @@
 (() => {
-  // ----- elements & overlay -----
+  // ----- Elements & overlay -----
   const img = document.getElementById('video');
   const canvas = document.getElementById('overlay');
   const ctx = canvas.getContext('2d');
@@ -10,6 +10,7 @@
   const elYPS   = document.getElementById('yps');
   const elHLA   = document.getElementById('hla');
   const elFPS   = document.getElementById('fps');
+  const modePill= document.getElementById('modePill');
 
   const el = {
     // Stage sliders
@@ -21,6 +22,13 @@
     // misc
     'show_mask': byId('show_mask'),
     'input.playback_speed': byId('input.playback_speed'),
+    // calibration
+    'btnPickColor': byId('btnPickColor'),
+    'btnCalLine': byId('btnCalLine'),
+    'btnCalSave': byId('btnCalSave'),
+    'cal.px_per_yard': byId('cal.px_per_yard'),
+    'btnReload': byId('btnReload'),
+    'btnSave': byId('btnSave'),
   };
 
   function byId(id){ return document.getElementById(id) }
@@ -29,9 +37,22 @@
   // video dims from telemetry (server space)
   let dims = { w: 1280, h: 720 };
   let teleLatest = {};
+
   // client-side live rectangles (draw immediately)
   let localStage = {x1:0,y1:0,x2:1,y2:1};
   let localTrack = {x1:0,y1:0,x2:1,y2:1};
+
+  // calibration line state (client)
+  let calMode = false;
+  let calLine = null; // {x1,y1,x2,y2} in server pixels
+  let dragging = null; // 'start' | 'end' | null
+
+  // color pick mode
+  let colorPick = false;
+
+  function setMode(str){
+    modePill.textContent = `mode: ${str}`;
+  }
 
   function fitCanvas() {
     canvas.width  = img.clientWidth || canvas.width;
@@ -55,6 +76,17 @@
   function drawDot(x, y, r, color) {
     ctx.beginPath(); ctx.arc(x, y, r||5, 0, Math.PI*2); ctx.fillStyle=color; ctx.fill();
   }
+  function drawCalLine(line){
+    if (!line) return;
+    const sx = canvas.width / (dims.w || 1);
+    const sy = canvas.height / (dims.h || 1);
+    const x1 = Math.round(line.x1*sx), y1 = Math.round(line.y1*sy);
+    const x2 = Math.round(line.x2*sx), y2 = Math.round(line.y2*sy);
+    ctx.strokeStyle = '#fde047'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    // handles
+    drawDot(x1,y1,6,'#fde047'); drawDot(x2,y2,6,'#fde047');
+  }
   function setStatus(state, hasBall) {
     elState.textContent = state || 'IDLE';
     let c='yellow'; if (state==='TRACKING') c='green'; if (state==='COOLDOWN') c='yellow'; if (state&&state.startsWith('SHOT')) c='red';
@@ -77,7 +109,6 @@
     elHLA.textContent = (data.hla ?? 0).toFixed(1) + '°';
     elFPS.textContent = Math.round(data.fps ?? 0);
     setStatus(data.state, !!data.ball);
-    // keep client in sync if server updated (e.g., from another client)
     if (data.stage && data.track) {
       localStage = data.stage;
       localTrack = data.track;
@@ -90,6 +121,7 @@
     ctx.clearRect(0,0,canvas.width,canvas.height);
     drawRect(scaleRect(localStage), '#0ff', 'STAGE');
     drawRect(scaleRect(localTrack), '#0f0', 'TRACK');
+    if (calMode) drawCalLine(calLine);
     const b = teleLatest.ball;
     if (b) {
       const sx = canvas.width / (dims.w||1), sy = canvas.height / (dims.h||1);
@@ -150,8 +182,6 @@
       }
     });
   }
-
-  // bind all sliders
   ['st','tr'].forEach(k => ['x1','y1','x2','y2'].forEach(e => bindRectSlider(k, e)));
 
   // quick toggles → preview
@@ -161,39 +191,126 @@
     postPreview({ input: { playback_speed: s }});
   });
 
+  // px/yard manual live preview
+  el['cal.px_per_yard'].addEventListener('change', () => {
+    const v = parseFloat(el['cal.px_per_yard'].value) || 1.0;
+    postPreview({ calibration: { px_per_yard: v }});
+  });
+
   // buttons
-  byId('btnReload').onclick = loadSettings;
-  byId('btnSave').onclick   = async () => {
-    // build full payload from current local rects + toggles only (server will merge)
+  el['btnReload'].onclick = loadSettings;
+  el['btnSave'].onclick   = async () => {
     const payload = {
       zones: { stage_roi: { ...localStage }, track_roi: { ...localTrack } },
       show_mask: !!el['show_mask'].checked,
-      input: { playback_speed: parseFloat(el['input.playback_speed'].value) || 1.0 }
+      input: { playback_speed: parseFloat(el['input.playback_speed'].value) || 1.0 },
+      calibration: { px_per_yard: parseFloat(el['cal.px_per_yard'].value) || 1.0 }
     };
     await fetch('/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
   };
 
+  // ----- Color pick mode -----
+  el['btnPickColor'].onclick = () => {
+    colorPick = true; calMode = false; dragging = null;
+    setMode('pick color (click on ball)');
+    el['btnCalSave'].style.display = 'none';
+    redrawOverlay();
+  };
+
+  canvas.addEventListener('click', async (ev) => {
+    if (!colorPick) return;
+    const {sx, sy} = screenToServerScale();
+    const x = Math.round(ev.offsetX / sx);
+    const y = Math.round(ev.offsetY / sy);
+    colorPick = false; setMode('view');
+    try {
+      const res = await fetch('/pick/ball', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ x, y }) });
+      const data = await res.json().catch(()=>null);
+      // Optionally display what was chosen:
+      if (data && data.ok) {
+        console.log('Picked HSV:', data.hsv, 'bounds:', data.bounds);
+      }
+    } catch(e) { /* ignore */ }
+  });
+
+  // ----- Calibration line drag mode -----
+  el['btnCalLine'].onclick = () => {
+    calMode = true; colorPick = false;
+    if (!calLine) {
+      // default horizontal line mid-screen
+      calLine = { x1: Math.round(dims.w*0.2), y1: Math.round(dims.h*0.5),
+                  x2: Math.round(dims.w*0.8), y2: Math.round(dims.h*0.5) };
+    }
+    setMode('calibrate line (drag ends)'); el['btnCalSave'].style.display = 'inline-block';
+    redrawOverlay();
+  };
+
+  el['btnCalSave'].onclick = async () => {
+    if (!calLine) return;
+    const yards = 1.0; // you can add a UI input for yards length if needed
+    try {
+      await fetch('/calibration/line', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ...calLine, yards, save: true })
+      });
+      setMode('view'); calMode = false; el['btnCalSave'].style.display = 'none';
+    } catch(e){ /* ignore */ }
+  };
+
+  function screenToServerScale(){
+    const sx = canvas.width / (dims.w || 1);
+    const sy = canvas.height / (dims.h || 1);
+    return { sx, sy };
+  }
+  function nearestHandle(px, py){
+    if (!calLine) return null;
+    const {sx, sy} = screenToServerScale();
+    const x1 = calLine.x1*sx, y1 = calLine.y1*sy;
+    const x2 = calLine.x2*sx, y2 = calLine.y2*sy;
+    const d1 = Math.hypot(px-x1, py-y1);
+    const d2 = Math.hypot(px-x2, py-y2);
+    const tol = 12;
+    if (d1 <= tol) return 'start';
+    if (d2 <= tol) return 'end';
+    return null;
+  }
+
+  canvas.addEventListener('mousedown', (ev) => {
+    if (!calMode) return;
+    const h = nearestHandle(ev.offsetX, ev.offsetY);
+    dragging = h;
+  });
+  canvas.addEventListener('mousemove', (ev) => {
+    if (!calMode || !dragging) return;
+    const {sx, sy} = screenToServerScale();
+    const x = Math.round(ev.offsetX / sx);
+    const y = Math.round(ev.offsetY / sy);
+    if (dragging === 'start') { calLine.x1 = x; calLine.y1 = y; }
+    else { calLine.x2 = x; calLine.y2 = y; }
+    redrawOverlay();
+  });
+  document.addEventListener('mouseup', () => { dragging = null; });
+
+  // ----- Load settings -----
   async function loadSettings(){
     const res = await fetch('/settings'); const cfg = await res.json();
-    if (cfg.dims && cfg.dims.w && cfg.dims.h) {
-      dims = { w: cfg.dims.w|0, h: cfg.dims.h|0 };
-    }
+    if (cfg.dims && cfg.dims.w && cfg.dims.h) { dims = { w: cfg.dims.w|0, h: cfg.dims.h|0 }; }
     setSliderRanges();
 
-    // init stage/track from server settings
     const st  = cfg.zones?.stage_roi || {};
     const tr  = cfg.zones?.track_roi || {};
     localStage = { x1: st.x1|0, y1: st.y1|0, x2: st.x2|0, y2: st.y2|0 };
     localTrack = { x1: tr.x1|0, y1: tr.y1|0, x2: tr.x2|0, y2: tr.y2|0 };
     pushSlidersFromRects();
 
-    // toggles
     el['show_mask'].checked = !!cfg.show_mask;
     el['input.playback_speed'].value = cfg.input?.playback_speed ?? 1.0;
+    el['cal.px_per_yard'].value = cfg.calibration?.px_per_yard ?? 1.0;
 
     redrawOverlay();
   }
 
-  // initial fetch
+  // init
   loadSettings();
 })();

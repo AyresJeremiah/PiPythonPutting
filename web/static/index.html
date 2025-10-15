@@ -12,7 +12,7 @@
     #status.green{ background:#16a34a } #status.yellow{ background:#f59e0b } #status.red{ background:#ef4444 }
     #wrap { position:relative; width:100%; max-width: 1100px; margin: 8px auto; }
     #video { width:100%; display:block; }
-    #overlay { position:absolute; inset:0; pointer-events:none; }
+    #overlay { position:absolute; inset:0; pointer-events:auto; } /* we capture clicks/drag */
     #metrics { padding:8px 12px; font-size: 14px; color:#cbd5e1; display:flex; gap:16px; flex-wrap:wrap }
     #panel { max-width:1100px; margin: 8px auto 20px; background:#10131a; border:1px solid #222; border-radius:12px; padding:12px }
     fieldset { border:1px solid #222; border-radius:10px; padding:12px; margin:12px 0 }
@@ -24,6 +24,7 @@
     button { background:#1e293b; color:#e5e7eb; border:1px solid #334155; padding:8px 12px; border-radius:8px; cursor:pointer }
     button:hover{ background:#243244 }
     code{ color:#93c5fd }
+    .pill { font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid #334155; background:#0f172a; }
   </style>
 </head>
 <body>
@@ -46,6 +47,7 @@
   <div>yds/s: <code id="yps">0.00</code></div>
   <div>HLA: <code id="hla">0.0°</code></div>
   <div>FPS: <code id="fps">0</code></div>
+  <span class="pill" id="modePill">mode: view</span>
 </div>
 
 <div id="panel">
@@ -67,6 +69,17 @@
         <div class="sl"><label for="tr.x2">x2</label><input id="tr.x2" type="range" min="1" max="1280"><output id="tr.x2.out">0</output></div>
         <div class="sl"><label for="tr.y2">y2</label><input id="tr.y2" type="range" min="1" max="720"><output id="tr.y2.out">0</output></div>
       </div>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Calibration</legend>
+    <div class="row">
+      <button id="btnPickColor">Set ball color</button>
+      <button id="btnCalLine">Set pixel→yard</button>
+      <button id="btnCalSave" style="display:none">Save Cal</button>
+      <span style="flex:1"></span>
+      <label>px/yard <input type="number" id="cal.px_per_yard" step="0.01" value="1.00"></label>
     </div>
   </fieldset>
 

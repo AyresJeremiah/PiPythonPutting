@@ -1,3 +1,5 @@
+import numpy as np
+import cv2
 import time, math, cv2, numpy as np
 
 from src.services.gspro import post_shot
@@ -138,6 +140,101 @@ def main():
         draw_zone(canvas, stage, "STAGE", (0, 200, 255))
         draw_zone(canvas, track, "TRACK", (0, 180, 0))
         zone_overlay = canvas
+    # ---- WebUI: ball color pick & calibration-line handlers ----
+    def _on_ball_pick(payload: dict):
+        """payload: {"x":int,"y":int}
+        Samples a 5x5 patch around (x,y) from the latest frame, converts to HSV,
+        builds +/- bands, updates cfg['ball_hsv'], and tries to live-apply to detector."""
+        try:
+            x = int(payload.get("x", 0)); y = int(payload.get("y", 0))
+        except Exception:
+            return {"ok": False, "error": "invalid xy"}
+        # get latest frame (or last frozen)
+        try:
+            frame = web.get_latest_frame()
+        except Exception:
+            frame = None
+        if frame is None:
+            # try to fall back to last displayed frame 'frozen_frame' if exists
+            try:
+                frame = frozen_frame.copy()
+            except Exception:
+                return {"ok": False, "error": "no frame available"}
+
+        h, w = frame.shape[:2]
+        x1 = max(0, min(w-1, x-2)); x2 = max(1, min(w, x+3))
+        y1 = max(0, min(h-1, y-2)); y2 = max(1, min(h, y+3))
+        patch = frame[y1:y2, x1:x2].copy()
+        if patch.size == 0:
+            return {"ok": False, "error": "empty patch"}
+
+        hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        H = int(np.median(hsv[:,:,0])); S = int(np.median(hsv[:,:,1])); V = int(np.median(hsv[:,:,2]))
+
+        # tolerance bands (tweak as needed)
+        dh, ds, dv = 10, 70, 70
+        lower = [max(0, H-dh), max(0, S-ds), max(0, V-dv)]
+        upper = [min(179, H+dh), min(255, S+ds), min(255, V+dv)]
+
+        # update config + live-apply to detector if supported
+        try:
+            cfg["ball_hsv"] = {"lower": lower, "upper": upper}
+        except Exception:
+            pass
+        if hasattr(detector, "set_hsv"):
+            try:
+                detector.set_hsv(tuple(lower), tuple(upper))
+            except Exception:
+                pass
+
+        return {"ok": True, "hsv": [H,S,V], "bounds": {"lower": lower, "upper": upper}}
+
+    def _on_cal_line(payload: dict):
+        """payload: {"x1","y1","x2","y2","yards":float (default 1.0), "save":bool}"""
+        try:
+            x1 = int(payload.get("x1")); y1 = int(payload.get("y1"))
+            x2 = int(payload.get("x2")); y2 = int(payload.get("y2"))
+        except Exception:
+            return {"ok": False, "error": "invalid line endpoints"}
+        yards = payload.get("yards", 1.0)
+        try:
+            yards = float(yards)
+            if yards <= 0: yards = 1.0
+        except Exception:
+            yards = 1.0
+
+        # compute px distance
+        dx = float(x2 - x1); dy = float(y2 - y1)
+        px = (dx*dx + dy*dy) ** 0.5
+        px_per_yard = px / max(1e-6, yards)
+
+        # update cfg
+        try:
+            cfg.setdefault("calibration", {})
+            cfg["calibration"]["px_per_yard"] = float(px_per_yard)
+            cfg["calibration"]["line"] = {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)}
+        except Exception:
+            pass
+
+        # If your overlay draws the line, you could rebuild here (optional):
+        try:
+            _rebuild_from_cfg()
+        except Exception:
+            pass
+
+        # persist if requested
+        if bool(payload.get("save", False)):
+            try:
+                _atomic_write_settings(cfg)
+            except Exception:
+                pass
+
+        return {"ok": True, "px_per_yard": round(float(px_per_yard), 4)}
+        nonlocal zone_overlay
+        canvas = np.zeros_like(first_frame)
+        draw_zone(canvas, stage, "STAGE", (0, 200, 255))
+        draw_zone(canvas, track, "TRACK", (0, 180, 0))
+        zone_overlay = canvas
     rebuild_zone_overlay()
 
     # ---- Settings management (live preview + save) ----
@@ -215,6 +312,8 @@ def main():
     web.set_cfg_provider(lambda: cfg)
     web.on_settings_preview(_apply_preview)
     web.on_settings_save(_apply_save)
+    web.on_ball_pick(_on_ball_pick)
+    web.on_calibration_line(_on_cal_line)
     web.start()
 
     # Editors (still available if you open native window)
