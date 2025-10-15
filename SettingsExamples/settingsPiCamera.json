@@ -76,7 +76,8 @@
     "exposure_auto": 1,
     "wb_auto": 1,
     "shutter_us": 5000,
-    "denoise": "off"
+    "denoise": "off",
+    "type": "picam2"
   },
   "target_width": 960,
   "input": {

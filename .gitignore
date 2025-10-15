@@ -6,3 +6,4 @@ __pycache__/
 .DS_Store
 *.mov
 *.mp4
+settings.json

@@ -77,14 +77,14 @@ def main():
     # Input source
     inp = cfg.get("input", {})
     cam_cfg = cfg.get("camera", {})
-    backend = inp.get("backend", "v4l2")  # "picam2" on Pi, "v4l2" elsewhere
+    cam_type = cam_cfg.get("type", inp.get("backend", "v4l2")).lower()  # accept legacy input.backend
 
-    if inp.get("source", "camera") == "video":
+    if inp.get("source","camera") == "video":
         camera = CvCamera(source=inp.get("video_path","testdata/my_putt.mp4"), loop=bool(inp.get("loop", True)))
         is_video = True
     else:
         is_video = False
-        if backend == "picam2":
+        if cam_type == "picam2":
             camera = PiCam2Camera(
                 width=cam_cfg.get("width", 1332),
                 height=cam_cfg.get("height", 990),
@@ -98,9 +98,8 @@ def main():
                 source=inp.get("camera_index", 0),
                 width=cam_cfg.get("width", 1280),
                 height=cam_cfg.get("height", 720),
-                pixel_format=cam_cfg.get("fourcc", "YUYV"),
-                fps=cam_cfg.get("fps", 0)  # 0 => don't force fps
             )
+
 
 
     detector = BallDetector()
@@ -220,6 +219,21 @@ def main():
                 camera.apply_format(fmt, w, h, fpsv)
         except Exception:
             pass
+        # live-apply camera controls (both backends)
+        try:
+            camera.apply_controls(cfg.get('camera', {}))
+        except Exception:
+            pass
+
+        # If V4L2 and user changed format/size/fps, try to apply without restart
+        try:
+            cam_type_now = cfg.get('camera',{}).get('type','v4l2').lower()
+            if cam_type_now != 'picam2':
+                cc = cfg.get('camera',{})
+                camera.apply_format(cc.get('fourcc'), cc.get('width'), cc.get('height'), cc.get('fps'))
+        except Exception:
+            pass
+
 
 
     web.on_settings_preview(_apply_preview)
@@ -368,7 +382,7 @@ def main():
                         if mph_exit is None or mph_exit >= min_mph:
                             log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
                             try:
-                                post_shot(mph_exit or 0.0, yps_exit or 0.0, hla or 0.0)
+                                post_shot(mph_exit or 0.0, hla or 0.0, cfg)
                             except Exception as e:
                                 log(f"POST error: {e}")
                         else:

@@ -1,6 +1,6 @@
 import requests
 
-def post_shot(mph, yps, direction, cfg):
+def post_shot(mph, direction, cfg = None):
     post = cfg.get("post", {})
     if not post.get("enabled", True):
         return False, None
