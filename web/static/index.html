@@ -1,103 +1,170 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>PuttTracker Web UI</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <style>
-    :root { color-scheme: dark; }
-    body { margin: 0; background: #0b0b0e; color: #e5e7eb; font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-    header { padding: 8px 12px; background:#111318; display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:10; }
-    .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
-    #status.green{ background:#16a34a } #status.yellow{ background:#f59e0b } #status.red{ background:#ef4444 }
-    #wrap { position:relative; width:100%; max-width: 1100px; margin: 8px auto; }
-    #video { width:100%; display:block; }
-    #overlay { position:absolute; inset:0; pointer-events:auto; } /* we capture clicks/drag */
-    #metrics { padding:8px 12px; font-size: 14px; color:#cbd5e1; display:flex; gap:16px; flex-wrap:wrap }
-    #panel { max-width:1100px; margin: 8px auto 20px; background:#10131a; border:1px solid #222; border-radius:12px; padding:12px }
-    fieldset { border:1px solid #222; border-radius:10px; padding:12px; margin:12px 0 }
-    legend { padding:0 6px; color:#a3b3d3 }
-    .grid { display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-    .sl { display:grid; grid-template-columns: 70px 1fr 70px; align-items:center; gap:8px; }
-    input[type="range"]{ width:100% }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
-    button { background:#1e293b; color:#e5e7eb; border:1px solid #334155; padding:8px 12px; border-radius:8px; cursor:pointer }
-    button:hover{ background:#243244 }
-    code{ color:#93c5fd }
-    .pill { font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid #334155; background:#0f172a; }
-  </style>
+    <meta charset="utf-8"/>
+    <title>PuttTracker Web UI</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <style>
+        :root { color-scheme: dark; }
+        body { margin: 0; background: #0b0b0e; color: #e5e7eb; font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+        header { padding: 8px 12px; background:#111318; display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:10; }
+        .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+        #status.green{ background:#16a34a } #status.yellow{ background:#f59e0b } #status.red{ background:#ef4444 }
+        #wrap { position:relative; width:100%; max-width: 1100px; margin: 8px auto; }
+        #video { width:100%; display:block; }
+        #overlay { position:absolute; inset:0; pointer-events:auto; } /* we capture clicks/drag */
+        #metrics { padding:8px 12px; font-size: 14px; color:#cbd5e1; display:flex; gap:16px; flex-wrap:wrap }
+        #panel { max-width:1100px; margin: 8px auto 20px; background:#10131a; border:1px solid #222; border-radius:12px; padding:12px }
+        fieldset { border:1px solid #222; border-radius:10px; padding:12px; margin:12px 0 }
+        legend { padding:0 6px; color:#a3b3d3 }
+        .grid { display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+        .sl { display:grid; grid-template-columns: 70px 1fr 70px; align-items:center; gap:8px; }
+        input[type="range"]{ width:100% }
+        .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+        button { background:#1e293b; color:#e5e7eb; border:1px solid #334155; padding:8px 12px; border-radius:8px; cursor:pointer }
+        button:hover{ background:#243244 }
+        code{ color:#93c5fd }
+        .pill { font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid #334155; background:#0f172a; }
+    </style>
 </head>
 <body>
 <header>
-  <strong>PuttTracker</strong>
-  <span id="state">IDLE</span>
-  <span class="dot" id="status"></span>
-  <div style="flex:1"></div>
-  <button id="btnReload">Reload</button>
-  <button id="btnSave">Save</button>
+    <strong>PuttTracker</strong>
+    <span id="state">IDLE</span>
+    <span class="dot" id="status"></span>
+    <div style="flex:1"></div>
+    <button id="btnReload">Reload</button>
+    <button id="btnSave">Save</button>
 </header>
 
 <div id="wrap">
-  <img id="video" src="/video.mjpg" alt="video"/>
-  <canvas id="overlay"></canvas>
+    <img id="video" src="/video.mjpg" alt="video"/>
+    <canvas id="overlay"></canvas>
 </div>
 
 <div id="metrics">
-  <div>mph: <code id="mph">0.0</code></div>
-  <div>yds/s: <code id="yps">0.00</code></div>
-  <div>HLA: <code id="hla">0.0°</code></div>
-  <div>FPS: <code id="fps">0</code></div>
-  <span class="pill" id="modePill">mode: view</span>
+    <div>mph: <code id="mph">0.0</code></div>
+    <div>yds/s: <code id="yps">0.00</code></div>
+    <div>HLA: <code id="hla">0.0°</code></div>
+    <div>FPS: <code id="fps">0</code></div>
+    <span class="pill" id="modePill">mode: view</span>
 </div>
 
 <div id="panel">
+
+    <fieldset>
+        <legend>Camera</legend>
+        <div class="grid">
+            <div>
+                <div class="sl">
+                    <label for="cam.brightness">brightness</label>
+                    <input id="cam.brightness" type="range" min="0" max="255" value="128">
+                    <output id="cam.brightness.out">128</output>
+                </div>
+                <div class="sl">
+                    <label for="cam.contrast">contrast</label>
+                    <input id="cam.contrast" type="range" min="0" max="255" value="128">
+                    <output id="cam.contrast.out">128</output>
+                </div>
+                <div class="sl">
+                    <label for="cam.saturation">saturation</label>
+                    <input id="cam.saturation" type="range" min="0" max="255" value="128">
+                    <output id="cam.saturation.out">128</output>
+                </div>
+                <div class="sl">
+                    <label for="cam.sharpness">sharpness</label>
+                    <input id="cam.sharpness" type="range" min="0" max="255" value="128">
+                    <output id="cam.sharpness.out">128</output>
+                </div>
+            </div>
+            <div>
+                <div class="sl">
+                    <label for="cam.gain">gain</label>
+                    <input id="cam.gain" type="range" min="0" max="255" value="0">
+                    <output id="cam.gain.out">0</output>
+                </div>
+                <div class="sl">
+                    <label for="cam.exposure">exposure</label>
+                    <input id="cam.exposure" type="range" min="1" max="10000" value="200">
+                    <output id="cam.exposure.out">200</output>
+                </div>
+                <div class="sl">
+                    <label for="cam.wb_temp">white balance temp</label>
+                    <input id="cam.wb_temp" type="range" min="2000" max="8000" step="50" value="4500">
+                    <output id="cam.wb_temp.out">4500</output>
+                </div>
+                <div class="row" style="gap:16px;margin-top:6px;">
+                    <label><input type="checkbox" id="cam.exposure_auto" checked> auto exposure</label>
+                    <label><input type="checkbox" id="cam.wb_auto" checked> auto white balance</label>
+                </div>
+            </div>
+        </div>
+    </fieldset>
+
+
     <!-- Add inside the panel, near Stage/Track controls -->
     <div class="row" style="margin: 6px 0 2px">
-      <button id="btnEditStage">Edit Stage</button>
-      <button id="btnEditTrack">Edit Track</button>
-      <button id="btnEditDone"  style="display:none">Done</button>
-      <span class="pill" id="editPill">edit: none</span>
+        <button id="btnEditStage">Edit Stage</button>
+        <button id="btnEditTrack">Edit Track</button>
+        <button id="btnEditDone" style="display:none">Done</button>
+        <span class="pill" id="editPill">edit: none</span>
     </div>
 
-  <fieldset>
-    <legend>Stage & Track (live sliders)</legend>
-    <div class="grid">
-      <div>
-        <h4>Stage</h4>
-        <div class="sl"><label for="st.x1">x1</label><input id="st.x1" type="range" min="0" max="1280"><output id="st.x1.out">0</output></div>
-        <div class="sl"><label for="st.y1">y1</label><input id="st.y1" type="range" min="0" max="720"><output id="st.y1.out">0</output></div>
-        <div class="sl"><label for="st.x2">x2</label><input id="st.x2" type="range" min="1" max="1280"><output id="st.x2.out">0</output></div>
-        <div class="sl"><label for="st.y2">y2</label><input id="st.y2" type="range" min="1" max="720"><output id="st.y2.out">0</output></div>
-      </div>
+    <fieldset>
+        <legend>Stage & Track (live sliders)</legend>
+        <div class="grid">
+            <div>
+                <h4>Stage</h4>
+                <div class="sl"><label for="st.x1">x1</label><input id="st.x1" type="range" min="0" max="1280">
+                    <output id="st.x1.out">0</output>
+                </div>
+                <div class="sl"><label for="st.y1">y1</label><input id="st.y1" type="range" min="0" max="720">
+                    <output id="st.y1.out">0</output>
+                </div>
+                <div class="sl"><label for="st.x2">x2</label><input id="st.x2" type="range" min="1" max="1280">
+                    <output id="st.x2.out">0</output>
+                </div>
+                <div class="sl"><label for="st.y2">y2</label><input id="st.y2" type="range" min="1" max="720">
+                    <output id="st.y2.out">0</output>
+                </div>
+            </div>
 
-      <div>
-        <h4>Track</h4>
-        <div class="sl"><label for="tr.x1">x1</label><input id="tr.x1" type="range" min="0" max="1280"><output id="tr.x1.out">0</output></div>
-        <div class="sl"><label for="tr.y1">y1</label><input id="tr.y1" type="range" min="0" max="720"><output id="tr.y1.out">0</output></div>
-        <div class="sl"><label for="tr.x2">x2</label><input id="tr.x2" type="range" min="1" max="1280"><output id="tr.x2.out">0</output></div>
-        <div class="sl"><label for="tr.y2">y2</label><input id="tr.y2" type="range" min="1" max="720"><output id="tr.y2.out">0</output></div>
-      </div>
-    </div>
-  </fieldset>
+            <div>
+                <h4>Track</h4>
+                <div class="sl"><label for="tr.x1">x1</label><input id="tr.x1" type="range" min="0" max="1280">
+                    <output id="tr.x1.out">0</output>
+                </div>
+                <div class="sl"><label for="tr.y1">y1</label><input id="tr.y1" type="range" min="0" max="720">
+                    <output id="tr.y1.out">0</output>
+                </div>
+                <div class="sl"><label for="tr.x2">x2</label><input id="tr.x2" type="range" min="1" max="1280">
+                    <output id="tr.x2.out">0</output>
+                </div>
+                <div class="sl"><label for="tr.y2">y2</label><input id="tr.y2" type="range" min="1" max="720">
+                    <output id="tr.y2.out">0</output>
+                </div>
+            </div>
+        </div>
+    </fieldset>
 
-  <fieldset>
-    <legend>Calibration</legend>
-    <div class="row">
-      <button id="btnPickColor">Set ball color</button>
-      <button id="btnCalLine">Set pixel→yard</button>
-      <button id="btnCalSave" style="display:none">Save Cal</button>
-      <span style="flex:1"></span>
-      <label>px/yard <input type="number" id="cal.px_per_yard" step="0.01" value="1.00"></label>
-    </div>
-  </fieldset>
+    <fieldset>
+        <legend>Calibration</legend>
+        <div class="row">
+            <button id="btnPickColor">Set ball color</button>
+            <button id="btnCalLine">Set pixel→yard</button>
+            <button id="btnCalSave" style="display:none">Save Cal</button>
+            <span style="flex:1"></span>
+            <label>px/yard <input type="number" id="cal.px_per_yard" step="0.01" value="1.00"></label>
+        </div>
+    </fieldset>
 
-  <fieldset>
-    <legend>Quick toggles</legend>
-    <div class="row">
-      <label>Show mask <input type="checkbox" id="show_mask"></label>
-      <label>Playback speed <input type="number" id="input.playback_speed" step="0.1" value="1.0"></label>
-    </div>
-  </fieldset>
+    <fieldset>
+        <legend>Quick toggles</legend>
+        <div class="row">
+            <label>Show mask <input type="checkbox" id="show_mask"></label>
+            <label>Playback speed <input type="number" id="input.playback_speed" step="0.1" value="1.0"></label>
+        </div>
+    </fieldset>
 </div>
 
 <script src="/static/app.js"></script>

@@ -1,19 +1,20 @@
 (() => {
   // ----- Elements & overlay -----
-  const img = document.getElementById('video');
-  const canvas = document.getElementById('overlay');
+  const img = document.getElementById('video');           // <img src="/video.mjpg">
+  const canvas = document.getElementById('overlay');      // <canvas>
   const ctx = canvas.getContext('2d');
 
-  const elState = document.getElementById('state');
-  const elStatus= document.getElementById('status');
-  const elMPH   = document.getElementById('mph');
-  const elYPS   = document.getElementById('yps');
-  const elHLA   = document.getElementById('hla');
-  const elFPS   = document.getElementById('fps');
-  const modePill= document.getElementById('modePill') || { textContent: '' };
-  const editPill= document.getElementById('editPill') || { textContent: '' };
+  // HUD readouts (optional—if not present, they noop)
+  const elState = byId('state') || { textContent: '' };
+  const elStatus= byId('status') || { className: '' };
+  const elMPH   = byId('mph')   || { textContent: '' };
+  const elYPS   = byId('yps')   || { textContent: '' };
+  const elHLA   = byId('hla')   || { textContent: '' };
+  const elFPS   = byId('fps')   || { textContent: '' };
+  const modePill= byId('modePill') || { textContent: '' };
+  const editPill= byId('editPill') || { textContent: '' };
 
-  // Control elements (existing)
+  // Controls (only referenced if exist)
   const el = {
     // Stage sliders
     'st.x1': byId('st.x1'), 'st.y1': byId('st.y1'),
@@ -21,18 +22,26 @@
     // Track sliders
     'tr.x1': byId('tr.x1'), 'tr.y1': byId('tr.y1'),
     'tr.x2': byId('tr.x2'), 'tr.y2': byId('tr.y2'),
-    // misc toggles
+    // Toggles
     'show_mask': byId('show_mask'),
     'input.playback_speed': byId('input.playback_speed'),
     'cal.px_per_yard': byId('cal.px_per_yard'),
-    // buttons
+    // Camera controls
+    'cam.brightness': byId('cam.brightness'),
+    'cam.contrast': byId('cam.contrast'),
+    'cam.saturation': byId('cam.saturation'),
+    'cam.sharpness': byId('cam.sharpness'),
+    'cam.gain': byId('cam.gain'),
+    'cam.exposure': byId('cam.exposure'),
+    'cam.wb_temp': byId('cam.wb_temp'),
+    'cam.exposure_auto': byId('cam.exposure_auto'),
+    'cam.wb_auto': byId('cam.wb_auto'),
+    // Buttons
     'btnReload': byId('btnReload'),
     'btnSave': byId('btnSave'),
-    // new edit buttons
     'btnEditStage': byId('btnEditStage'),
     'btnEditTrack': byId('btnEditTrack'),
     'btnEditDone':  byId('btnEditDone'),
-    // optional color & cal already in your UI
     'btnPickColor': byId('btnPickColor'),
     'btnCalLine': byId('btnCalLine'),
     'btnCalSave': byId('btnCalSave'),
@@ -41,7 +50,7 @@
   function byId(id){ return document.getElementById(id) }
   function outFor(id){ const n=document.getElementById(id + '.out'); return n || { textContent: ()=>{} } }
 
-  // video dims from telemetry (server space)
+  // video dims from telemetry
   let dims = { w: 1280, h: 720 };
   let teleLatest = {};
 
@@ -54,20 +63,28 @@
   let calMode   = false;
   let calLine   = null;
 
-  // NEW: edit rectangles on stream
-  // editMode: 'none' | 'stage' | 'track'
-  let editMode  = 'none';
-  let dragging  = null; // { kind:'stage'|'track', op:'move'|'n'|'s'|'e'|'w'|'nw'|'ne'|'sw'|'se', start:{sx,sy}, rect:{...} }
+  // NEW: stream editing of rectangles
+  let editMode  = 'none'; // 'none' | 'stage' | 'track'
+  let dragging  = null;   // { kind, op, start:{sx,sy}, rect:{...} }
 
-  // --- debounce helper for preview POSTs
-  let previewTimer = null;
-  function postPreviewDebounced(payload, delay=40){
-    clearTimeout(previewTimer);
-    previewTimer = setTimeout(()=>postPreview(payload), delay);
+  // Debounced preview POST
+  let __pvTimer = null;
+  function postPreviewDebounced(payload, delay = 60) {
+    clearTimeout(__pvTimer);
+    __pvTimer = setTimeout(() => postPreview(payload), delay);
+  }
+  async function postPreview(payload){
+    try {
+      await fetch('/settings/preview', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+    } catch(e){ /* ignore */ }
   }
 
   function fitCanvas() {
-    canvas.width  = img.clientWidth || canvas.width;
+    canvas.width  = img.clientWidth  || canvas.width;
     canvas.height = img.clientHeight || canvas.height;
   }
   window.addEventListener('resize', fitCanvas);
@@ -219,6 +236,33 @@
     postPreview({ calibration: { px_per_yard: v }});
   });
 
+  // ------ Camera controls → live preview ------
+  function bindCamRange(idKey) {
+    const r = el[idKey]; if (!r) return;
+    const o = document.getElementById(idKey + '.out');
+    r.addEventListener('input', () => {
+      const v = (idKey === 'cam.exposure' || idKey === 'cam.wb_temp') ? Number(r.value) : (r.value|0);
+      if (o) o.textContent = String(v);
+      const key = idKey.split('.')[1];
+      const payload = { camera: {} };
+      payload.camera[key] = v;
+      postPreviewDebounced(payload, 40);
+    });
+  }
+  ['cam.brightness','cam.contrast','cam.saturation','cam.sharpness','cam.gain','cam.exposure','cam.wb_temp']
+    .forEach(bindCamRange);
+
+  function bindCamToggle(idKey) {
+    const c = el[idKey]; if (!c) return;
+    c.addEventListener('change', () => {
+      const key = idKey.split('.')[1];
+      const payload = { camera: {} };
+      payload.camera[key] = c.checked ? 1 : 0;
+      postPreviewDebounced(payload, 40);
+    });
+  }
+  ['cam.exposure_auto','cam.wb_auto'].forEach(bindCamToggle);
+
   // buttons
   if (el['btnReload']) el['btnReload'].onclick = loadSettings;
   if (el['btnSave']) el['btnSave'].onclick   = async () => {
@@ -226,12 +270,24 @@
       zones: { stage_roi: { ...localStage }, track_roi: { ...localTrack } },
       show_mask: !!(el['show_mask'] && el['show_mask'].checked),
       input: { playback_speed: parseFloat(el['input.playback_speed']?.value || '1.0') || 1.0 },
-      calibration: { px_per_yard: parseFloat(el['cal.px_per_yard']?.value || '1.0') || 1.0 }
+      calibration: { px_per_yard: parseFloat(el['cal.px_per_yard']?.value || '1.0') || 1.0 },
+      camera: {
+        brightness:    Number(el['cam.brightness']?.value || 128),
+        contrast:      Number(el['cam.contrast']?.value   || 128),
+        saturation:    Number(el['cam.saturation']?.value || 128),
+        sharpness:     Number(el['cam.sharpness']?.value  || 128),
+        gain:          Number(el['cam.gain']?.value       || 0),
+        exposure:      Number(el['cam.exposure']?.value   || 200),
+        wb_temp:       Number(el['cam.wb_temp']?.value    || 4500),
+        exposure_auto: (el['cam.exposure_auto']?.checked ? 1 : 0),
+        wb_auto:       (el['cam.wb_auto']?.checked       ? 1 : 0)
+      }
     };
-    await fetch('/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    try { await fetch('/settings/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }); }
+    catch(e){}
   };
 
-  // ---------- NEW: Edit on stream ----------
+  // ---------- NEW: Edit on stream (Stage/Track) ----------
   function setEditMode(m){
     editMode = m; dragging = null;
     if (el['btnEditDone']) el['btnEditDone'].style.display = (m==='none') ? 'none' : 'inline-block';
@@ -293,7 +349,6 @@
 
   canvas.addEventListener('mousedown', (ev) => {
     if (editMode==='none') return;
-    // don’t interfere with color or line modes
     if (colorPick || calMode) return;
 
     const st = scaleRect(localStage);
@@ -303,7 +358,6 @@
 
     const op = hitTest(target.rScaled, ev.offsetX, ev.offsetY);
     if (!op) return;
-    const { sx, sy } = screenToServerScale();
     dragging = {
       kind: target.kind,
       op,
@@ -328,7 +382,7 @@
     pushSlidersFromRects();
     redrawOverlay();
 
-    // live preview, but debounce to avoid spamming server
+    // live preview, debounce to avoid spam
     const payload = (dragging.kind==='stage')
       ? { zones: { stage_roi: { ...rectRef } } }
       : { zones: { track_roi: { ...rectRef } } };
@@ -340,7 +394,7 @@
     dragging = null;
   });
 
-  // ----- Color pick & calibration (unchanged behavior; optional in your UI) -----
+  // ----- Color pick & calibration -----
   if (el['btnPickColor']) el['btnPickColor'].onclick = () => {
     colorPick = true; calMode = false; setMode('pick color (click on ball)');
     if (el['btnCalSave']) el['btnCalSave'].style.display = 'none';
@@ -367,6 +421,38 @@
     if (el['btnCalSave']) el['btnCalSave'].style.display = 'inline-block';
     redrawOverlay();
   };
+
+  canvas.addEventListener('mousedown', (ev) => {
+    if (!calMode) return;
+    // detect near endpoints to drag
+    const {sx, sy} = screenToServerScale();
+    const mx = Math.round(ev.offsetX / sx);
+    const my = Math.round(ev.offsetY / sy);
+    const near = (ax,ay)=> (Math.abs(mx-ax)<=10 && Math.abs(my-ay)<=10);
+    if (near(calLine.x1, calLine.y1)) dragging = { kind:'calA', start:{mx,my} };
+    else if (near(calLine.x2, calLine.y2)) dragging = { kind:'calB', start:{mx,my} };
+    else dragging = { kind:'calMove', start:{mx,my}, rect:{...calLine} };
+  }, true);
+
+  canvas.addEventListener('mousemove', (ev) => {
+    if (!calMode || !dragging) return;
+    const {sx, sy} = screenToServerScale();
+    const mx = Math.round(ev.offsetX / sx);
+    const my = Math.round(ev.offsetY / sy);
+    if (dragging.kind==='calA') { calLine.x1 = mx; calLine.y1 = my; }
+    else if (dragging.kind==='calB') { calLine.x2 = mx; calLine.y2 = my; }
+    else if (dragging.kind==='calMove') {
+      const dx = mx - dragging.start.mx, dy = my - dragging.start.my;
+      calLine.x1 = dragging.rect.x1 + dx; calLine.y1 = dragging.rect.y1 + dy;
+      calLine.x2 = dragging.rect.x2 + dx; calLine.y2 = dragging.rect.y2 + dy;
+    }
+    redrawOverlay();
+  }, true);
+
+  document.addEventListener('mouseup', () => {
+    if (calMode) dragging = null;
+  }, true);
+
   if (el['btnCalSave']) el['btnCalSave'].onclick = async () => {
     if (!calLine) return;
     const yards = 1.0;
@@ -398,6 +484,24 @@
     if (el['show_mask']) el['show_mask'].checked = !!cfg.show_mask;
     if (el['input.playback_speed']) el['input.playback_speed'].value = cfg.input?.playback_speed ?? 1.0;
     if (el['cal.px_per_yard']) el['cal.px_per_yard'].value = cfg.calibration?.px_per_yard ?? 1.0;
+
+    // --- camera defaults from cfg ---
+    const cam = cfg.camera || {};
+    function _setVal(id, v) {
+      const e = el[id];
+      const o = document.getElementById(id + '.out');
+      if (e) e.value = String(v);
+      if (o) o.textContent = String(v);
+    }
+    if ('brightness'    in cam) _setVal('cam.brightness', cam.brightness);
+    if ('contrast'      in cam) _setVal('cam.contrast',   cam.contrast);
+    if ('saturation'    in cam) _setVal('cam.saturation', cam.saturation);
+    if ('sharpness'     in cam) _setVal('cam.sharpness',  cam.sharpness);
+    if ('gain'          in cam) _setVal('cam.gain',       cam.gain);
+    if ('exposure'      in cam) _setVal('cam.exposure',   cam.exposure);
+    if ('wb_temp'       in cam) _setVal('cam.wb_temp',    cam.wb_temp);
+    if ('exposure_auto' in cam && el['cam.exposure_auto']) el['cam.exposure_auto'].checked = !!cam.exposure_auto;
+    if ('wb_auto'       in cam && el['cam.wb_auto'])       el['cam.wb_auto'].checked       = !!cam.wb_auto;
 
     redrawOverlay();
   }

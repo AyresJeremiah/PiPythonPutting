@@ -10,7 +10,7 @@
     "endy": 720
   },
   "calibration": {
-    "px_per_yard": 972.0,
+    "px_per_yard": 972,
     "yards_length": 0.9,
     "line": {
       "x1": 324,
@@ -40,10 +40,11 @@
     ]
   },
   "input": {
-    "source": "video",
-    "playback_speed": 1,
-    "video_path": "../testdata/better.mp4",
+    "source": "camera",
+    "camera_index": 0,
+    "video_path": "testdata/my_putt.mp4",
     "loop": true,
+    "playback_speed": 1,
     "speed_affects_metrics": false
   },
   "gate": {
@@ -60,13 +61,24 @@
       "x1": 198,
       "y1": 404,
       "x2": 509,
-      "y2": 914
+      "y2": 720
     },
     "track_roi": {
       "x1": 516,
       "y1": 380,
       "x2": 1280,
-      "y2": 902
+      "y2": 720
     }
+  },
+  "camera": {
+    "brightness": 0,
+    "contrast": 45,
+    "saturation": 128,
+    "sharpness": 128,
+    "gain": 116,
+    "exposure": 200,
+    "wb_temp": 4500,
+    "exposure_auto": 0,
+    "wb_auto": 0
   }
 }

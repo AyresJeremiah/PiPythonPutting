@@ -152,6 +152,12 @@ def main():
         # refresh rects
         stage = cfg["zones"]["stage_roi"]
         track = cfg["zones"]["track_roi"]
+        # camera controls (live preview)
+        try:
+            camera.apply_controls(cfg.get('camera', {}))
+        except Exception:
+            pass
+
         # refresh pacing
         is_video = (inp.get("source") == "video")
         if is_video:

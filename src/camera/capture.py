@@ -104,6 +104,70 @@ class Camera:
         try: self.close()
         except Exception: pass
 
+
+    # -------- camera controls (V4L2/OpenCV) --------
+    def apply_controls(self, cam_cfg: dict):
+        """
+        Apply V4L2-style controls using OpenCV properties.
+
+        cam_cfg example:
+          {
+            "brightness": 128,   # 0-255
+            "contrast":   128,   # 0-255
+            "saturation": 128,   # 0-255
+            "sharpness":  128,   # 0-255 (may map to GAMMA)
+            "gain":       0,     # 0-255 (driver-specific)
+            "exposure_auto": 1,  # 1=auto, 0=manual (mapping varies)
+            "exposure":    200,  # manual exposure (backend units)
+            "wb_auto":     1,    # 1=auto WB, 0=manual
+            "wb_temp":     4500  # 2000-8000 (often only when wb_auto=0)
+          }
+        """
+        if not hasattr(self, "_cap") or self._cap is None:
+            return
+
+        cap = self._cap
+
+        def _set(prop, val):
+            try:
+                cap.set(prop, float(val))
+            except Exception:
+                pass
+
+        import cv2
+
+        # Core controls
+        if "brightness" in cam_cfg:
+            _set(cv2.CAP_PROP_BRIGHTNESS, cam_cfg.get("brightness"))
+        if "contrast" in cam_cfg:
+            _set(cv2.CAP_PROP_CONTRAST,   cam_cfg.get("contrast"))
+        if "saturation" in cam_cfg:
+            _set(cv2.CAP_PROP_SATURATION, cam_cfg.get("saturation"))
+
+        # Sharpness (or GAMMA as fallback)
+        if "sharpness" in cam_cfg:
+            if hasattr(cv2, "CAP_PROP_SHARPNESS"):
+                _set(cv2.CAP_PROP_SHARPNESS, cam_cfg.get("sharpness"))
+            elif hasattr(cv2, "CAP_PROP_GAMMA"):
+                _set(cv2.CAP_PROP_GAMMA, cam_cfg.get("sharpness"))
+
+        # Exposure auto/manual (OpenCV often maps 0.25 manual / 0.75 auto)
+        if "exposure_auto" in cam_cfg and hasattr(cv2, "CAP_PROP_AUTO_EXPOSURE"):
+            use_auto = 1 if cam_cfg.get("exposure_auto") else 0
+            _set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75 if use_auto else 0.25)
+
+        if "exposure" in cam_cfg and hasattr(cv2, "CAP_PROP_EXPOSURE"):
+            _set(cv2.CAP_PROP_EXPOSURE, cam_cfg.get("exposure"))
+
+        if "gain" in cam_cfg and hasattr(cv2, "CAP_PROP_GAIN"):
+            _set(cv2.CAP_PROP_GAIN, cam_cfg.get("gain"))
+
+        # White balance
+        if "wb_auto" in cam_cfg and hasattr(cv2, "CAP_PROP_AUTO_WB"):
+            _set(cv2.CAP_PROP_AUTO_WB, 1 if cam_cfg.get("wb_auto") else 0)
+
+        if "wb_temp" in cam_cfg and hasattr(cv2, "CAP_PROP_WB_TEMPERATURE"):
+            _set(cv2.CAP_PROP_WB_TEMPERATURE, cam_cfg.get("wb_temp"))
     def negotiated(self):
         w = self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         h = self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
