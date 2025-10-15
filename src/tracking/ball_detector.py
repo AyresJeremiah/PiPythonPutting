@@ -1,8 +1,7 @@
 import cv2
-from utils.runtime_cfg import get_cfg
+from src.utils.runtime_cfg import get_cfg
 import numpy as np
-from config import COLOR_RANGES
-import settings as appsettings
+from src.config import COLOR_RANGES
 
 class BallDetector:
     def __init__(self):

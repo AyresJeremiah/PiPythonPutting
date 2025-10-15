@@ -1,13 +1,12 @@
 import time, math, cv2, numpy as np
-
-from src.services.gspro import post_shot
-from tracking.ball_detector import BallDetector
-from tracking.motion_tracker import MotionTracker
-from camera.capture import Camera
-from utils.logger import log
-import settings as appsettings
-from ui.webui import WebUI
-from utils.runtime_cfg import set_cfg
+from .services.gspro import post_shot
+from .tracking.ball_detector import BallDetector
+from .tracking.motion_tracker import MotionTracker
+from .camera.capture import Camera
+from src.utils.logger import log
+import src.settings as appsettings
+from src.ui.webui import WebUI
+from src.utils.runtime_cfg import set_cfg
 
 COOLDOWN_SEC = 1.0
 LOST_FRAMES_LIMIT = 6
