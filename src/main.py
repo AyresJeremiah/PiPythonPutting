@@ -1,8 +1,8 @@
 import time, math, cv2, numpy as np
-from .services.gspro import post_shot
-from .tracking.ball_detector import BallDetector
-from .tracking.motion_tracker import MotionTracker
-from .camera.capture import Camera
+from src.services.gspro import post_shot
+from src.tracking.ball_detector import BallDetector
+from src.tracking.motion_tracker import MotionTracker
+from src.camera.capture import Camera
 from src.utils.logger import log
 import src.settings as appsettings
 from src.ui.webui import WebUI
@@ -79,7 +79,12 @@ def main():
         camera = Camera(source=inp.get("video_path", "testdata/my_putt.mp4"),
                         loop=bool(inp.get("loop", True)))
     else:
-        camera = Camera(source=0)
+        cam_cfg = cfg.get('camera', {})
+        camera = Camera(
+            source=0,
+            width=int(cam_cfg.get('width', 1280)),
+            height=int(cam_cfg.get('height', 720))
+        )
 
     detector = BallDetector()
     tracker  = MotionTracker()
@@ -187,6 +192,18 @@ def main():
     def _apply_save(new_cfg: dict):
         _apply_preview(new_cfg)
         _atomic_write_settings(cfg)
+        # live-apply camera format if provided
+        try:
+            camc = cfg.get('camera', {})
+            fmt  = camc.get('fourcc')
+            w    = camc.get('width')
+            h    = camc.get('height')
+            fpsv = camc.get('fps')
+            if (fmt is not None) or (w is not None) or (h is not None) or (fpsv is not None):
+                camera.apply_format(fmt, w, h, fpsv)
+        except Exception:
+            pass
+
 
     web.on_settings_preview(_apply_preview)
     web.on_settings_save(_apply_save)
