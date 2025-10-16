@@ -61,7 +61,6 @@ class MotionTracker:
             return None, None
 
         velocity = math.sqrt(dx * dx + dy * dy) / dt  # px/s
-        direction = math.degrees(math.atan2(dy, dx))  # -180..180, 0 = right
 
         return velocity, self.compute_hla(first_pos, last_pos)
 
