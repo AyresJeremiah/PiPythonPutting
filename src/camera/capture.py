@@ -188,6 +188,7 @@ class PiCam2Camera:
         self.picam2 = Picamera2()
         cfg = self.picam2.create_video_configuration(
             main={"size": (int(width), int(height)), "format": "RGB888"},
+            transform={"hflip": True, "vflip": True}  # TODO MAKE CONFIGURABLE
         )
         self.picam2.configure(cfg)
 
