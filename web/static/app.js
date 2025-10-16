@@ -137,9 +137,50 @@
     elStatus.className = `dot ${c}`;
   }
 
-  // ----- telemetry WS -----
-  const proto = (location.protocol === 'https:') ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  // ----- telemetry WS (robust, same-origin, auto-reconnect) -----
+  let ws;
+  function makeWsUrl() {
+    const proto = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+    const host  = window.location.hostname || 'localhost';
+    const port  = window.location.port ? window.location.port : '8080'; // default if page has no port
+    return `${proto}://${host}:${port}/ws`;
+  }
+  function connectWs() {
+    const url = makeWsUrl();
+    console.log('Connecting WS →', url);
+    ws = new WebSocket(url);
+
+    ws.onopen  = () => console.log('WS open:', url);
+    ws.onerror = (e) => console.error('WS error:', e);
+    ws.onclose = () => {
+      console.warn('WS closed; retrying in 2s…');
+      setTimeout(connectWs, 2000);
+    };
+    // keep your existing onmessage body — paste it right here:
+    ws.onmessage = (ev) => {
+      let data; try { data = JSON.parse(ev.data) } catch { return; }
+      teleLatest = data;
+      if (data.dims && (data.dims.w|0) && (data.dims.h|0)) {
+        dims = { w: data.dims.w|0, h: data.dims.h|0 };
+        setSliderRanges();
+      }
+      elMPH.textContent = (data.mph ?? 0).toFixed(1);
+      elYPS.textContent = (data.yps ?? 0).toFixed(2);
+      elHLA.textContent = (data.hla ?? 0).toFixed(1) + '°';
+      elFPS.textContent = Math.round(data.fps ?? 0);
+      setStatus(data.state, !!data.ball);
+      if (data.stage && data.track) {
+        if (!dragging) {
+          localStage = data.stage;
+          localTrack = data.track;
+          pushSlidersFromRects();
+        }
+      }
+      redrawOverlay();
+    };
+  }
+  connectWs();
+
   ws.onmessage = (ev) => {
     let data; try { data = JSON.parse(ev.data) } catch { return; }
     teleLatest = data;
