@@ -1,0 +1,91 @@
+{
+  "ball_color": "white",
+  "min_ball_radius_px": 10,
+  "show_mask": false,
+  "roi": {
+    "startx": 243,
+    "endx": 968,
+    "starty": 393,
+    "endy": 720
+  },
+  "calibration": {
+    "px_per_yard": 50,
+    "yards_length": 0.9,
+    "line": {
+      "x1": 324,
+      "y1": 540,
+      "x2": 1296,
+      "y2": 540
+    }
+  },
+  "send_delay": 0.5,
+  "min_report_mph": 0.0,
+  "post": {
+    "enabled": true,
+    "host": "10.10.10.23",
+    "port": 8888,
+    "path": "/putting",
+    "timeout_sec": 2.5
+  },
+  "ball_hsv": {
+    "lower": [
+      65,
+      0,
+      90
+    ],
+    "upper": [
+      85,
+      73,
+      230
+    ]
+  },
+  "gate": {
+    "enabled": false,
+    "line": {
+      "x1": 689,
+      "y1": 353,
+      "x2": 644,
+      "y2": 1079
+    }
+  },
+  "zones": {
+    "stage_roi": {
+      "x1": 186,
+      "y1": 633,
+      "x2": 597,
+      "y2": 992
+    },
+    "track_roi": {
+      "x1": 597,
+      "y1": 621,
+      "x2": 1125,
+      "y2": 1007
+    }
+  },
+  "camera": {
+    "type": "v4l2",
+    "fourcc": "MJPG",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "exposure_auto": 0,
+    "wb_auto": 0,
+    "brightness": 175,
+    "contrast": 45,
+    "saturation": 128,
+    "sharpness": 128,
+    "gain": 116,
+    "exposure": 200,
+    "wb_temp": 4500,
+    "shutter_us": 5000,
+    "denoise": "off"
+  },
+  "target_width": 960,
+  "input": {
+    "source": "video",
+    "video_path": "../testdata/straight_bright.mp4",
+    "loop": true,
+    "playback_speed": 1,
+    "speed_affects_metrics": false
+  }
+}
