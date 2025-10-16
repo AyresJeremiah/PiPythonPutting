@@ -58,14 +58,14 @@ def to_real_units(px_velocity, px_per_yard):
     return yps, mph
 
 
-def compute_hla(last_pos, cur_pos):
+def compute_hla(last_pos, cur_pos): #TODO REMOVE THIS
     if last_pos is None or cur_pos is None:
         return None
     (x1, y1), (x2, y2) = last_pos, cur_pos
     dx, dy = (x1 - x2), (y1 - y2)
     heading = math.degrees(math.atan2(-dy, dx))
     # Left negative, right positive, clamp [-60, 60]
-    return heading
+    return -heading
 
 
 def main():
@@ -122,20 +122,11 @@ def main():
         cap_tmp = cv2.VideoCapture(inp.get("video_path", "testdata/my_putt.mp4"))
         vid_fps = cap_tmp.get(cv2.CAP_PROP_FPS) or 30.0
         cap_tmp.release()
-        try:
-            tracker.set_dt_override(1.0 / float(vid_fps))
-        except Exception:
-            pass
         speed = float(inp.get("playback_speed", 1.0))
         try:
             wait_ms = max(1, int(round(1000.0 / (float(vid_fps) * max(0.01, speed)))))
         except Exception:
             wait_ms = 33
-    else:
-        try:
-            tracker.set_dt_override(None)
-        except Exception:
-            pass
 
     # First frame & zones
     frame_iter  = camera.stream()
@@ -194,15 +185,10 @@ def main():
             _cap = cv2.VideoCapture(inp.get("video_path", "testdata/my_putt.mp4"))
             _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
             _cap.release()
-            try: tracker.set_dt_override(1.0/float(_fps))
-            except Exception: pass
             try:
                 wait_ms = max(1, int(round(1000.0 / (float(_fps) * max(0.01, float(inp.get("playback_speed",1.0)))))))
             except Exception:
                 wait_ms = 33
-        else:
-            try: tracker.set_dt_override(None)
-            except Exception: pass
 
     # ---------- Web UI ----------
     web = WebUI(port=8080, jpeg_quality=80)
@@ -322,9 +308,9 @@ def main():
     state = "IDLE"
     lost_frames = 0
     last_pos = None
-    last_valid_velocity = None
     last_shot_time = 0.0
-    has_entered_tracking = False
+    tracking_delay_post_time = 2.0
+    tracking_stop_time = None
 
     while True:
         try:
@@ -374,38 +360,48 @@ def main():
 
             elif state == "STAGED":
                 if rect_contains(center, track):
-                    tracker.reset(); last_pos = center; state = "TRACKING"; log("Tracking started.")
+                    tracker.reset()
+                    last_pos = center
+                    state = "TRACKING"
+                    tracking_stop_time =  time.time() + tracking_delay_post_time
+                    # start_pos = center
+                    log("Tracking started.")
 
             elif state == "TRACKING":
+                #start Timer to stop tracking after delay
                 if rect_contains(center, track):
-                    # wait until we leave Stage, then start measuring
-                    velocity, _ = tracker.update(center)
-                    if velocity is not None:
-                        last_valid_velocity = velocity
-                    yps, mph = to_real_units(velocity, px_per_yd)
+                    tracker.update(center)
                     last_pos = center
-                    has_entered_tracking = True
-                else:
-                    if has_entered_tracking:
-                        has_entered_tracking = False
-                        state = "FINALIZE"
+                if time.time() > tracking_stop_time:
+                    log("Tracking Complete.")
+                    state = "FINALIZE"
 
             elif state == "FINALIZE":
-                finalize = True
-                if center is None and lost_frames < LOST_FRAMES_LIMIT:
-                    finalize = False
-                if finalize:
-                    yps_exit, mph_exit = to_real_units(last_valid_velocity, px_per_yd)
-                    hla = compute_hla(last_pos, center if center is not None else last_pos)
-                    if mph_exit is None or mph_exit >= min_mph:
+                (velocity, hla) = tracker.get_final_speed_and_direction()
+                if velocity is not None and hla is not None:
+                    yps_exit, mph_exit = to_real_units(velocity, px_per_yd)
+                    if (mph_exit is None or mph_exit >= min_mph) and -60.0 < hla < 60.0:
                         log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
                         try:
                             post_shot(mph_exit or 0.0, hla or 0.0, cfg)
+                            state = "COOLDOWN"
+                            last_shot_time = time.time()
+                            tracker.reset()
+                            lost_frames = 0
                         except Exception as e:
                             log(f"POST error: {e}")
                     else:
                         log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
-                    state = "COOLDOWN"; last_shot_time = time.time(); tracker.reset(); lost_frames = 0
+                        state = "COOLDOWN"
+                        last_shot_time = time.time()
+                        tracker.reset()
+                        lost_frames = 0
+                else:
+                    #Failed shot discard
+                    state = "COOLDOWN"
+                    last_shot_time = time.time()
+                    tracker.reset()
+                    lost_frames = 0
 
         # Optional mask overlay (debug) — front-end overlays are all client-side now
         disp = frame.copy()

@@ -1,27 +1,29 @@
 import math
 import time
 
+class PosAndTime:
+    def __init__(self, position, timestamp):
+        self.position = position
+        self.timestamp = timestamp
+
 class MotionTracker:
     def __init__(self):
+        self.position_and_times = []
         self.last_position = None
         self.last_time = None
         self._fps_time = time.time()
         self._frames = 0
         self._fps = None
-        self._dt_override = None  # override delta-time when using video
 
     @property
     def fps(self):
         return self._fps
 
-    def set_dt_override(self, dt):
-        self._dt_override = dt  # None disables override
-
-
     def reset(self):
         """Clear state so velocity/dir don’t spike after unpausing."""
         self.last_position = None
         self.last_time = None
+        self.position_and_times = []
 
     def _tick_fps(self):
         self._frames += 1
@@ -35,28 +37,39 @@ class MotionTracker:
         self._tick_fps()
 
         if position is None:
-            self.last_position = None   # reset continuity when ball lost
-            self.last_time = None
+            return
+
+        self.position_and_times.append((position, time.time()))
+
+    def get_final_speed_and_direction(self):
+        # TODO Could check if the points are roughly collinear and ignore outliers in case we track something we dont want.
+
+        length = len(self.position_and_times)
+        if length < 2:
             return None, None
 
-        current_time = time.time()
+        (first_pos, time1) = self.position_and_times[0] #self.last_position
+        (last_pos, time2) = self.position_and_times[length-1]
 
-        if self.last_position is None:
-            self.last_position = position
-            self.last_time = current_time
-            return None, None
+        (x1, y1) = first_pos
+        (x2, y2) = last_pos
 
-        (x1, y1) = self.last_position
-        (x2, y2) = position
         dx = x2 - x1
         dy = y2 - y1
-        dt = self._dt_override if self._dt_override else (current_time - self.last_time)
+        dt = time2 - time1
         if dt <= 0:
             return None, None
 
-        velocity = math.sqrt(dx*dx + dy*dy) / dt     # px/s
-        direction = math.degrees(math.atan2(dy, dx)) # -180..180, 0 = right
+        velocity = math.sqrt(dx * dx + dy * dy) / dt  # px/s
+        direction = math.degrees(math.atan2(dy, dx))  # -180..180, 0 = right
 
-        self.last_position = position
-        self.last_time = current_time
-        return velocity, direction
+        return velocity, self.compute_hla(first_pos, last_pos)
+
+    def compute_hla(self, start_pos, end_pos):
+        if start_pos is None or end_pos is None:
+            return None
+        (x1, y1), (x2, y2) = start_pos, end_pos
+        dx, dy = (x1 - x2), (y1 - y2)
+        heading = math.degrees(math.atan2(-dy, dx))
+        # Left negative, right positive, clamp [-60, 60]
+        return -heading
