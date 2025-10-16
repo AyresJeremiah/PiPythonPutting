@@ -391,7 +391,8 @@ def main():
                         except Exception as e:
                             log(f"POST error: {e}")
                     else:
-                        log(f"IGNORED (under {min_mph:.1f} mph): {0.0 if mph_exit is None else mph_exit:.1f} mph")
+                        log(f"IGNORED (Min {min_mph:.1f} mph): Actual:{"NULL" if mph_exit is None else mph_exit:.1f} mph")
+                        log(f"Launch angle. Required range is [-60°, 60°] Actual: {"NULL" if hla is None else hla:.2f}° ")
                         state = "COOLDOWN"
                         last_shot_time = time.time()
                         tracker.reset()

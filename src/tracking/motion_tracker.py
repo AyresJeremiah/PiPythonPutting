@@ -68,7 +68,7 @@ class MotionTracker:
         if start_pos is None or end_pos is None:
             return None
         (x1, y1), (x2, y2) = start_pos, end_pos
-        dx, dy = (x1 - x2), (y1 - y2)
+        dx, dy = (x2 - y2), (y1 - y2) #TODO NEED A WAY TO CONFIG THIS IN SETTINGS
         heading = math.degrees(math.atan2(-dy, dx))
         # Left negative, right positive, clamp [-60, 60]
-        return -heading
+        return heading
