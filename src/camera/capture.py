@@ -222,6 +222,20 @@ class PiCam2Camera:
             self.picam2.set_controls({"NoiseReductionMode": mode})
 
         self.picam2.start()
+
+        # Get full sensor size
+        full_w, full_h = self.picam2.sensor_resolution
+
+        # Calculate a centered 2× zoom crop (half width & height)
+        x = full_w // 4
+        y = full_h // 4
+        w = full_w // 2
+        h = full_h // 2
+
+        # Apply digital zoom
+        #self.picam2.set_controls({"ScalerCrop": (x, y, w, h)})
+
+
         self._frame = None
         self._lock = threading.Lock()
         self._stop = False
