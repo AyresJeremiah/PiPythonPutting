@@ -26,6 +26,7 @@
     'show_mask': byId('show_mask'),
     'input.playback_speed': byId('input.playback_speed'),
     'cal.px_per_yard': byId('cal.px_per_yard'),
+    'cal.speed_scaler': byId('cal.speed_scaler'),
     // Camera controls
     'cam.brightness': byId('cam.brightness'),
     'cam.contrast': byId('cam.contrast'),
@@ -276,6 +277,12 @@
     const v = parseFloat(el['cal.px_per_yard'].value) || 1.0;
     postPreview({ calibration: { px_per_yard: v }});
   });
+  if (el['cal.speed_scaler']) el['cal.speed_scaler'].addEventListener('input', () => {
+    const v = parseFloat(el['cal.speed_scaler'].value) || 1.0;
+    const o = document.getElementById('cal.speed_scaler.out');
+    if (o) o.textContent = v.toFixed(2);
+    postPreviewDebounced({ calibration: { speed_scaler: v }});
+  });
 
   // ------ Camera controls → live preview ------
   function bindCamRange(idKey) {
@@ -311,7 +318,7 @@
       zones: { stage_roi: { ...localStage }, track_roi: { ...localTrack } },
       show_mask: !!(el['show_mask'] && el['show_mask'].checked),
       input: { playback_speed: parseFloat(el['input.playback_speed']?.value || '1.0') || 1.0 },
-      calibration: { px_per_yard: parseFloat(el['cal.px_per_yard']?.value || '1.0') || 1.0 },
+      calibration: { px_per_yard: parseFloat(el['cal.px_per_yard']?.value || '1.0') || 1.0, speed_scaler: parseFloat(el['cal.speed_scaler']?.value || '1.0') || 1.0 },
       camera: {
         brightness:    Number(el['cam.brightness']?.value || 128),
         contrast:      Number(el['cam.contrast']?.value   || 128),
@@ -525,6 +532,12 @@
     if (el['show_mask']) el['show_mask'].checked = !!cfg.show_mask;
     if (el['input.playback_speed']) el['input.playback_speed'].value = cfg.input?.playback_speed ?? 1.0;
     if (el['cal.px_per_yard']) el['cal.px_per_yard'].value = cfg.calibration?.px_per_yard ?? 1.0;
+    if (el['cal.speed_scaler']) {
+      const sv = cfg.calibration?.speed_scaler ?? 1.0;
+      el['cal.speed_scaler'].value = sv;
+      const so = document.getElementById('cal.speed_scaler.out');
+      if (so) so.textContent = Number(sv).toFixed(2);
+    }
 
     // --- camera defaults from cfg ---
     const cam = cfg.camera || {};

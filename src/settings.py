@@ -18,6 +18,7 @@ _DEFAULTS: Dict[str, Any] = {
     "calibration": {
         "px_per_yard": None,
         "yards_length": 1.0,
+        "speed_scaler": 1.0,
         "line": {"x1": 100, "y1": 100, "x2": 400, "y2": 100}
     },
     "post": { "enabled": True, "host": "10.10.10.23", "port": 8888, "path": "/putting", "timeout_sec": 2.5 },

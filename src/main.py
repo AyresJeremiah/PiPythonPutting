@@ -50,10 +50,12 @@ def clamp_rect(rc, w, h):
         rc["y2"] = min(h, rc["y1"] + 1)
 
 
-def to_real_units(px_velocity, px_per_yard):
+def to_real_units(px_velocity, px_per_yard, speed_scaler=1.0):
     if px_velocity is None or not px_per_yard or px_per_yard <= 0:
         return None, None
     yps = px_velocity / px_per_yard
+    if speed_scaler and speed_scaler != 1.0:
+        yps = yps ** speed_scaler
     mph = yps * (3600.0 / 1760.0)
     return yps, mph
 
@@ -79,6 +81,7 @@ def main():
     min_mph    = float(cfg.get("min_report_mph", 1.0))
     inp        = cfg.get("input", {})
     px_per_yd  = cfg.get("calibration", {}).get("px_per_yard", 1.0)
+    speed_scaler = float(cfg.get("calibration", {}).get("speed_scaler", 1.0))
     detect_cfg = cfg.get("detect", {})
     detect_scale = float(detect_cfg.get("scale", 0.75))
     if detect_scale <= 0 or detect_scale > 1.0:
@@ -162,11 +165,12 @@ def main():
                 dst[k] = v
 
     def _rebuild_from_cfg():
-        nonlocal target_w, min_mph, inp, px_per_yd, detect_scale, stage, track, is_video, wait_ms
+        nonlocal target_w, min_mph, inp, px_per_yd, speed_scaler, detect_scale, stage, track, is_video, wait_ms
         target_w   = int(cfg.get("target_width", target_w))
         min_mph    = float(cfg.get("min_report_mph", min_mph))
         inp        = cfg.get("input", inp)
         px_per_yd  = cfg.get("calibration",{}).get("px_per_yard", px_per_yd)
+        speed_scaler = float(cfg.get("calibration",{}).get("speed_scaler", speed_scaler))
         detect_scale = float(cfg.get("detect",{}).get("scale", detect_scale))
         if detect_scale <= 0 or detect_scale > 1.0:
             detect_scale = 1.0
@@ -379,7 +383,7 @@ def main():
             elif state == "FINALIZE":
                 (velocity, hla) = tracker.get_final_speed_and_direction()
                 if velocity is not None and hla is not None:
-                    yps_exit, mph_exit = to_real_units(velocity, px_per_yd)
+                    yps_exit, mph_exit = to_real_units(velocity, px_per_yd, speed_scaler)
                     if (mph_exit is None or mph_exit >= min_mph) and -60.0 < hla < 60.0:
                         log(f"SHOT: {0.0 if mph_exit is None else mph_exit:.1f} mph | hla={0.0 if hla is None else hla:.2f}°")
                         try:
